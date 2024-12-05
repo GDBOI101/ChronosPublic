@@ -12,6 +12,8 @@ type OptionalArgs = {
   [key: string]: any;
 };
 
+
+
 export default class Logger {
   private logLevel: LogLevel;
 

@@ -1,15 +1,10 @@
-import { ActivityType, type Client } from "discord.js";
-import { logger } from "../..";
+import { Event } from "../handlers/Event";
+import { ActivityType, Client } from "discord.js";
 
-export default class ReadyEvent {
-  name = "ready";
-  once = false;
-
-  execute(client: Client) {
-    logger.info(`Logged in as ${client.user?.username}`);
-    client.user?.setActivity({
-      name: "Chronos",
-      type: ActivityType.Playing,
-    });
+export default class ReadyEvent extends Event<"ready"> {
+  constructor(client: Client) {
+    super(client, "ready");
   }
+
+  async run(): Promise<void> {}
 }

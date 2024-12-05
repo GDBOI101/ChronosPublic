@@ -92,20 +92,6 @@ export default class AccountService {
     }
   }
 
-  public async findTopAccounts(playlist: string, limit: number): Promise<Account[]> {
-    try {
-      return await this.accountRepository
-        .createQueryBuilder("account")
-        .where(`account.stats->'${playlist}'->>'wins' IS NOT NULL`)
-        .orderBy(`account.stats->'${playlist}'->>'wins'`, "DESC")
-        .limit(limit)
-        .getMany();
-    } catch (error) {
-      logger.error(`Error finding top accounts: ${error}`);
-      return [];
-    }
-  }
-
   public async updateAccount(accountId: string, updateData: Partial<Account>): Promise<boolean> {
     try {
       const queryBuilder: UpdateQueryBuilder<Account> = this.accountRepository

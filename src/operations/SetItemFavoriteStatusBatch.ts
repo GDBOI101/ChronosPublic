@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import errors from "../utilities/errors";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import { accountService, profilesService, userService } from "..";
 import type { ProfileId } from "../utilities/responses";
 import MCPResponses from "../utilities/responses";
@@ -55,6 +55,8 @@ export default async function (c: Context) {
 
   const { itemIds, itemFavStatus } = body;
 
+  let shouldUpdateProfile = false;
+
   for (const item in itemIds) {
     if (!profile.items[itemIds[item]]) continue;
     if (typeof itemFavStatus[item] !== "boolean") continue;
@@ -67,15 +69,17 @@ export default async function (c: Context) {
       attributeName: "favorite",
       attributeValue: profile.items[itemIds[item]].attributes.favorite,
     });
+
+    shouldUpdateProfile = true;
   }
 
-  if (applyProfileChanges.length > 0) {
+  if (shouldUpdateProfile) {
     profile.rvn += 1;
     profile.commandRevision += 1;
     profile.updatedAt = new Date().toISOString();
-  }
 
-  await profilesService.update(user.accountId, "athena", profile);
+    await profilesService.update(user.accountId, profileId, profile);
+  }
 
   return c.json(MCPResponses.generate(profile, applyProfileChanges, profileId));
 }

@@ -19,6 +19,9 @@ export class Profiles extends BaseEntity {
   common_public!: IProfile;
 
   @Column({ type: "jsonb", default: {} })
+  profile0!: IProfile;
+
+  @Column({ type: "jsonb", default: {} })
   campaign!: IProfile;
 
   @Column({ type: "jsonb", default: {} })

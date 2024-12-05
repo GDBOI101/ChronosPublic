@@ -31,7 +31,7 @@ export default function () {
       id: user.accountId,
       displayName: user.username,
       name: user.username,
-      email: `${user.email}@PROTECTION-staging.chronos.dev`,
+      email: `${user.email}@****.com`,
       failedLoginAttempts: 0,
       lastLogin: timestamp,
       numberOfDisplayNameChanges: 0,

@@ -6,6 +6,8 @@ import { v4 as uuid } from "uuid";
 import jwt, { decode, type JwtPayload } from "jsonwebtoken";
 import crypto from "node:crypto";
 import uaparser from "../utilities/uaparser";
+import { sign } from "hono/jwt";
+import internal from "node:stream";
 
 export function validateBase64(input: string) {
   return /^[A-Za-z0-9+/]*={0,2}$/.test(input);
@@ -54,12 +56,14 @@ export default function () {
       );
     }
 
+    // NOTE: Eventually will implement hardware id getting throguh a client dll.
+
     const blacklistedSeasons = new Set([1, 2, 3, 4, 5, 6, 7]);
     let deviceId = null;
     const isSeasonBlacklisted = blacklistedSeasons.has(uahelper.season);
 
     if (!isSeasonBlacklisted) {
-      deviceId = c.req.header("X-Epic-Device-ID");
+      deviceId = c.req.header("X-Epic-Device-ID") || c.req.header("HWID");
     }
 
     let { grant_type } = body;
@@ -285,18 +289,25 @@ export default function () {
               400,
             );
 
-          const userToken = jwt.verify(exchange_code as string, config.client_secret) as JwtPayload;
+          const exchangeCode = await tokensService.getToken(exchange_code as string);
 
-          if (!userToken)
-            return c.json(errors.createError(404, c.req.url, "Invalid Token.", timestamp), 404);
+          if (!exchangeCode) {
+            return c.json(
+              errors.createError(400, c.req.url, "Invalid Exchange Code.", timestamp),
+              400,
+            );
+          }
 
-          user = await userService.findUserByAccountId(userToken.sub as string);
-
-          if (!user)
+          const userByAccountId = await userService.findUserByAccountId(exchangeCode.accountId);
+          if (!userByAccountId) {
             return c.json(
               errors.createError(404, c.req.url, "Failed to find user.", timestamp),
               404,
             );
+          }
+
+          user = userByAccountId;
+
           break;
 
         case "refresh_token":
@@ -403,6 +414,47 @@ export default function () {
     await tokensService.getTokenByTypeAndAccountId("refreshtoken", user.accountId);
 
     return c.body(null, 200);
+  });
+
+  app.post("/account/api/oauth/createExchangeCode", async (c) => {
+    const timestamp = new Date().toISOString();
+
+    const body = await c.req.json();
+
+    if (!body) {
+      logger.error(`Invalid 'body': ${body}`);
+      return c.json(errors.createError(400, c.req.url, "'body' is missing.", timestamp), 400);
+    }
+
+    if (!body.accountId) {
+      logger.error(`Invalid 'accountId': ${body.accountId}`);
+      return c.json(errors.createError(400, c.req.url, "'accountId' is missing.", timestamp), 400);
+    }
+
+    if (body.endpointAccessToken !== config.client_secret) {
+      logger.error(`Invalid 'accessToken': ${body.endpointAccessToken}`);
+      return c.json(errors.createError(400, c.req.url, "Invalid 'accessToken'.", timestamp), 400);
+    }
+
+    await tokensService.create(
+      {
+        type: "exchangecode",
+        accountId: body.accountId,
+        token: uuid().replace(/-/g, ""),
+        clientId: "",
+        grant: "exchange_code",
+      },
+      body.accountId,
+    );
+
+    const code = await tokensService.getTokenByTypeAndAccountId("exchangecode", body.accountId);
+
+    if (!code)
+      return c.json(errors.createError(500, c.req.url, "Failed to create token.", timestamp), 500);
+
+    return c.json({
+      code: code.token,
+    });
   });
 
   app.get("/account/api/oauth/verify", async (c) => {

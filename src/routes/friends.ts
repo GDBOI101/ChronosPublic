@@ -89,7 +89,7 @@ export default function () {
 
       const permissions = c.get("permission");
 
-      const hasPermission = permissions.hasPermission(`friends:${accountId}`, [
+      const hasPermission = await permissions.hasPermission(`friends:${accountId}`, [
         "READ,UPDATE,DELETE",
       ]);
 
@@ -186,7 +186,7 @@ export default function () {
 
       const permissions = c.get("permission");
 
-      const hasPermission = permissions.hasPermission(`friends:${accountId}`, [
+      const hasPermission = await permissions.hasPermission(`friends:${accountId}`, [
         "READ,UPDATE,DELETE",
       ]);
 
@@ -303,7 +303,7 @@ export default function () {
 
       const permissions = c.get("permission");
 
-      const hasPermission = permissions.hasPermission(`friends:${user.accountId}`, [
+      const hasPermission = await permissions.hasPermission(`friends:${user.accountId}`, [
         "READ,UPDATE,DELETE",
       ]);
 
@@ -380,7 +380,7 @@ export default function () {
 
       const permissions = c.get("permission");
 
-      const hasPermission = permissions.hasPermission(`friends:${user.accountId}`, [
+      const hasPermission = await permissions.hasPermission(`friends:${user.accountId}`, [
         "READ,UPDATE,DELETE",
       ]);
 
@@ -492,7 +492,7 @@ export default function () {
 
       const permissions = c.get("permission");
 
-      const hasPermission = permissions.hasPermission(`friends:${user.accountId}`, [
+      const hasPermission = await permissions.hasPermission(`friends:${user.accountId}`, [
         "READ,UPDATE,DELETE",
       ]);
 

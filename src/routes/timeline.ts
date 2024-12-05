@@ -2,13 +2,13 @@ import { app, db, logger } from "..";
 import { Validation } from "../middleware/validation";
 import errors from "../utilities/errors";
 import TimelineHelper from "../utilities/timelinehelper";
+import { expiration, nextWeekExpiration } from "../utilities/timestamp";
 import uaparser from "../utilities/uaparser";
 
 export default function () {
-  app.get("/fortnite/api/calendar/v1/timeline", Validation.verifyPermissions, async (c) => {
+  app.get("/fortnite/api/calendar/v1/timeline", async (c) => {
     const date = new Date();
     const useragent = c.req.header("User-Agent");
-    const timestamp = new Date().toISOString();
 
     if (!useragent)
       return c.json(
@@ -16,25 +16,6 @@ export default function () {
         400,
       );
 
-    const permissions = c.get("permission");
-
-    const hasPermission = permissions.hasPermission("fortnite:calender", "READ");
-
-    if (!hasPermission)
-      return c.json(
-        errors.createError(
-          401,
-          c.req.url,
-          permissions.errorReturn("fortnite:calender", "READ"),
-          timestamp,
-        ),
-        401,
-      );
-
-    date.setUTCHours(0, 0, 0, 0);
-    date.setUTCDate(date.getUTCDate() + 1);
-
-    const expiration = date.toISOString();
     const uahelper = uaparser(useragent);
 
     if (!uahelper)
@@ -43,56 +24,32 @@ export default function () {
         400,
       );
 
-    logger.debug(`Current UserAgent: ${useragent}`);
-
     const activeEvents = await TimelineHelper.createTimeline(useragent);
 
     return c.json({
       channels: {
         "client-matchmaking": {
+          states: [],
+          cacheExpire: "9999-01-01T00:00:00.000Z",
+        },
+        "community-votes": {
           states: [
             {
-              validForm: new Date().toISOString(),
+              validFrom: "0001-01-01T00:00:00.000Z",
               activeEvents: [],
               state: {
-                region: {
-                  BR: {
-                    eventFlagsForcedOff: ["Playlist_DefaultDuo", "Playlist_DefaultSolo"],
-                  },
-                  NAW: {
-                    eventFlagsForcedOff: ["Playlist_DefaultDuo", "Playlist_DefaultSolo"],
-                  },
-                  OCE: {
-                    eventFlagsForcedOff: ["Playlist_DefaultDuo", "Playlist_DefaultSolo"],
-                  },
-                  ME: {
-                    eventFlagsForcedOff: ["Playlist_DefaultDuo", "Playlist_DefaultSolo"],
-                  },
-                  ASIA: {
-                    eventFlagsForcedOff: ["Playlist_DefaultDuo", "Playlist_DefaultSolo"],
-                  },
-                },
+                electionId: "",
+                candidates: [],
+                electionEnds: "9999-12-31T23:59:59.999Z",
+                numWinners: 1,
+                wipeNumber: 1,
+                winnerStateHours: 1,
+                offers: [],
               },
             },
           ],
-          cacheExpire: expiration,
+          cacheExpire: "9999-01-01T00:00:00.000Z",
         },
-        "featured-islands": {
-          states: [
-            {
-              validFrom: new Date().toISOString(),
-              activeEvents: [],
-              state: {
-                islandCodes: [],
-                playlistCuratedContent: {},
-                playlistCuratedHub: {},
-                islandTemplates: [],
-              },
-            },
-          ],
-          cacheExpire: expiration,
-        },
-        "community-votes": {},
         "client-events": {
           states: [
             {
@@ -101,19 +58,17 @@ export default function () {
               state: {
                 activeStorefronts: [],
                 eventNamedWeights: {},
-                seasonNumber: uahelper?.season,
-                seasonTemplateId: `AthenaSeason:athenaseason${uahelper?.season}`,
+                seasonNumber: uahelper.season,
+                seasonTemplateId: `AthenaSeason:athenaseason${uahelper.season}`,
                 matchXpBonusPoints: 0,
-                seasonBegin: "9999-01-01T00:00:00Z",
+                seasonBegin: "2020-01-01T00:00:00Z",
                 seasonEnd: "9999-01-01T00:00:00Z",
                 seasonDisplayedEnd: "9999-01-01T00:00:00Z",
                 weeklyStoreEnd: expiration,
-                stwEventStoreEnd: "9999-01-01T00:00:00.000Z",
-                stwWeeklyStoreEnd: "9999-01-01T00:00:00.000Z",
+                stwEventStoreEnd: nextWeekExpiration,
+                stwWeeklyStoreEnd: expiration,
+                sectionStoreEnds: {},
                 dailyStoreEnd: expiration,
-                sectionStoreEnds: {
-                  Featured: expiration,
-                },
               },
             },
           ],

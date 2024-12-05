@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { accountService, config, logger, profilesService, questsService, userService } from "..";
 import errors from "../utilities/errors";
 import type { ProfileId } from "../utilities/responses";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import MCPResponses from "../utilities/responses";
 import { handleProfileSelection } from "./QueryProfile";
 import uaparser from "../utilities/uaparser";
@@ -66,28 +66,63 @@ export default async function (c: Context) {
 
     const { itemIds } = body;
 
-    for (const id of itemIds) {
-      const quests = await questsService.findQuestByTemplateId(
-        user.accountId,
-        config.currentSeason,
-        id,
-      );
+    if (profileId === "athena") {
+      for (const id of itemIds) {
+        const quests = await questsService.findQuestByTemplateId(
+          user.accountId,
+          config.currentSeason,
+          id,
+        );
 
-      if (quests) {
-        // quests.entity.sent_new_notification = true;
+        if (quests) {
+          quests.entity.sent_new_notification = true;
+          profile.items[id].attributes.sent_new_notification = true;
+
+          await Promise.all([
+            questsService.updateQuest(quests, user.accountId, config.currentSeason, id),
+          ]);
+
+          applyProfileChanges.push({
+            changeType: "itemAttrChanged",
+            itemId: id,
+            attributeNam: "sent_new_notification",
+            attributeValue: true,
+          });
+
+          shouldUpdateProfile = true;
+        }
+      }
+    }
+
+    let shouldUpdateCampaignProfile = false;
+
+    if (profileId === "campaign") {
+      for (const id of itemIds) {
+        const quests = await questsService.findQuestByTemplateId(
+          user.accountId,
+          config.currentSeason,
+          id,
+        );
+
+        if (quests) {
+          quests.entity.sent_new_notification = true;
+          profile.items[id].attributes.sent_new_notification = true;
+
+          await Promise.all([
+            questsService.updateQuest(quests, user.accountId, config.currentSeason, id),
+          ]);
+
+          applyProfileChanges.push({
+            changeType: "itemAttrChanged",
+            itemId: id,
+            attributeNam: "sent_new_notification",
+            attributeValue: true,
+          });
+
+          shouldUpdateProfile = true;
+        }
+
         profile.items[id].attributes.sent_new_notification = true;
-
-        // await Promise.all([
-        //   questsService.updateQuest(quests, user.accountId, config.currentSeason),
-        // ]);
-
-        applyProfileChanges.push({
-          changeType: "itemAttrChanged",
-          itemId: id,
-          attributeNam: "sent_new_notification",
-          attributeValue: true,
-        });
-
         shouldUpdateProfile = true;
       }
     }
@@ -97,13 +132,7 @@ export default async function (c: Context) {
       profile.commandRevision += 1;
       profile.updatedAt = new Date().toISOString();
 
-      await profilesService.updateMultiple([
-        {
-          type: "athena",
-          accountId: user.accountId,
-          data: profile,
-        },
-      ]);
+      await Promise.all([profilesService.update(user.accountId, profileId, profile)]);
     }
 
     return c.json(MCPResponses.generate(profile, [], profileId));

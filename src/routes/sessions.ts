@@ -1,17 +1,60 @@
-import { accountService, app, config, profilesService, userService } from "..";
+import {
+  accountService,
+  app,
+  config,
+  logger,
+  profilesService,
+  questsService,
+  seasonStatsService,
+  serversService,
+  userService,
+} from "..";
 import { Validation } from "../middleware/validation";
 import { Profiles } from "../tables/profiles";
 import errors from "../utilities/errors";
 import { LevelsManager } from "../utilities/managers/LevelsManager";
 import { RewardsManager } from "../utilities/managers/RewardsManager";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import { v4 as uuid } from "uuid";
 import MCPResponses from "../utilities/responses";
 import { BattlepassManager } from "../utilities/managers/BattlepassManager";
-import { servers } from "../sockets/matchmaker/server";
 import { SendMessageToId } from "../sockets/xmpp/utilities/SendMessageToId";
 import { handleProfileSelection } from "../operations/QueryProfile";
 import RefreshAccount from "../utilities/refresh";
+import type { Lootlist } from "../../types/profilesdefs";
+import { z } from "zod";
+import { QuestManager, QuestType } from "../utilities/managers/QuestManager";
+
+const applyMatchStatsSchema = z.object({
+  username: z.string(),
+  sessionId: z.string().uuid("Invalid sessionId format. Expected UUID."),
+  matchType: z.enum(["vbucks", "levels", "quest"], {
+    errorMap: () => ({ message: "matchType must be either 'vbucks', 'levels', or 'quest'" }),
+  }),
+  stats: z.union([
+    z.object({
+      eliminations: z.number().int().min(0, "Eliminations must be a non-negative integer"),
+      // 100 - 1
+      placement: z.number().int().min(0, "Placement must be a non-negative integer"),
+      isVictory: z.boolean(),
+      gamemode: z.enum(["solos", "duos", "squads", "ltm"], {
+        errorMap: () => ({ message: "gamemode must be one of 'solos', 'duos', 'squads', 'ltm'" }),
+      }),
+    }),
+    z.object({
+      totalXp: z.number().int().min(0, "Total XP must be a non-negative integer"),
+    }),
+    z.object({
+      quest: z.object({
+        questId: z.string(),
+        updates: z.object({
+          BackendName: z.string(),
+          Count: z.number().int().min(0, "Completion must be a non-negative integer"),
+        }),
+      }),
+    }),
+  ]),
+});
 
 export default function () {
   app.post("/gamesessions/setStatus", Validation.verifyBasicToken, async (c) => {
@@ -27,9 +70,9 @@ export default function () {
     const { status, sessionId } = body;
 
     try {
-      const existingServers = servers.find((s) => s.sessionId === sessionId);
+      const existingServer = await serversService.getServerBySessionId(sessionId);
 
-      if (!existingServers)
+      if (!existingServer)
         return c.json(
           errors.createError(
             400,
@@ -40,7 +83,13 @@ export default function () {
           400,
         );
 
-      existingServers.status = status;
+      existingServer.status = status;
+      await serversService.updateServerQueue(
+        existingServer.identifier,
+        existingServer.options.region,
+        existingServer.port,
+        existingServer.queue,
+      );
 
       return c.json({ message: `Successfully set server status to '${status}'` });
     } catch (error) {
@@ -52,265 +101,443 @@ export default function () {
   });
 
   app.post(
-    "/gamesessions/stats/vbucks/:username/:sessionId/:eliminations",
+    "/gamesessions/stats/operations/ApplyMatchStats",
     Validation.verifyBasicToken,
     async (c) => {
-      const username = c.req.param("username");
       const timestamp = new Date().toISOString();
+      const body = await c.req.json();
 
-      const [user] = await Promise.all([userService.findUserByUsername(username)]);
-
-      if (!user)
-        return c.json(errors.createError(404, c.req.url, "User not found!", timestamp), 404);
-
-      const [common_core, athena] = await Promise.all([
-        handleProfileSelection("common_core", user.accountId),
-        handleProfileSelection("athena", user.accountId),
-      ]);
-
-      if (!common_core)
-        return c.json(
-          errors.createError(404, c.req.url, "Profile 'common_core' was not found!", timestamp),
-          404,
-        );
-
-      if (!athena)
-        return c.json(
-          errors.createError(404, c.req.url, "Profile 'athena' was not found!", timestamp),
-          404,
-        );
-
-      let body;
-
-      try {
-        body = await c.req.json();
-      } catch (error) {
-        return c.json(errors.createError(400, c.req.url, "Body isn't Valid JSON!", timestamp), 400);
+      if (!body) {
+        return c.json(errors.createError(400, c.req.url, "Invalid body.", timestamp), 400);
       }
 
-      const { isVictory } = await c.req.json();
-      const changes: object[] = [];
+      const parseResult = applyMatchStatsSchema.safeParse(body);
 
-      try {
-        const eliminations = parseInt(c.req.param("eliminations"));
-
-        for (const pastSeasons of athena.stats.attributes!.past_seasons!) {
-          if (pastSeasons.seasonNumber === config.currentSeason) {
-            let currency = eliminations * 50;
-            if (isVictory) {
-              currency += 200;
-              pastSeasons.numWins += 1;
-            }
-
-            common_core.items["Currency:MtxPurchased"].quantity += currency;
-
-            changes.push({
-              amountGained: currency,
-            });
-          }
-        }
-
-        await profilesService.update(user.accountId, "common_core", common_core);
-        await profilesService.update(user.accountId, "athena", athena);
-
-        await RefreshAccount(user.accountId, user.username);
-
-        return c.json(MCPResponses.generate(common_core, changes, "common_core"));
-      } catch (error) {
-        return c.json({ error: `Internal Server Error: ${error}` }, 500);
+      if (!parseResult.success) {
+        const validationError = parseResult.error.format();
+        return c.json(
+          errors.createError(
+            400,
+            c.req.url,
+            `Invalid body. ${JSON.stringify(validationError)}`,
+            timestamp,
+          ),
+          400,
+        );
       }
-    },
-  );
 
-  app.post(
-    "/gamesessions/levels/:username/:sessionId/:totalXp",
-    Validation.verifyBasicToken,
-    async (c) => {
-      const username = c.req.param("username");
-      const timestamp = new Date().toISOString();
+      const { username, sessionId, matchType, stats } = parseResult.data;
 
       try {
-        const user = await userService.findUserByUsername(username);
+        const [user, server] = await Promise.all([
+          userService.findUserByUsername(username),
+          serversService.getServerBySessionId(sessionId),
+        ]);
+
         if (!user) {
           return c.json(errors.createError(404, c.req.url, "User not found!", timestamp), 404);
         }
 
-        const athena = await handleProfileSelection("athena", user.accountId);
-        if (!athena) {
-          return c.json(
-            errors.createError(404, c.req.url, "Profile 'athena' was not found!", timestamp),
-            404,
-          );
+        if (!server) {
+          return c.json(errors.createError(404, c.req.url, "Server not found.", timestamp), 404);
         }
 
-        const common_core = await handleProfileSelection("common_core", user.accountId);
-        if (!common_core) {
-          return c.json(
-            errors.createError(404, c.req.url, "Profile 'common_core' was not found!", timestamp),
-            404,
-          );
+        const [common_core, athena] = await Promise.all([
+          handleProfileSelection("common_core", user.accountId),
+          handleProfileSelection("athena", user.accountId),
+        ]);
+
+        if (!common_core || !athena) {
+          return c.json(errors.createError(404, c.req.url, "Profile not found!", timestamp), 404);
         }
 
-        const totalXp = parseInt(c.req.param("totalXp"));
-        const { attributes } = athena.stats;
-        const changes: object[] = [];
+        let changes: object[] = [];
 
-        for (const pastSeason of attributes.past_seasons!) {
-          if (pastSeason.seasonNumber === config.currentSeason) {
-            pastSeason.seasonXp += totalXp;
+        if (matchType === "vbucks" && "eliminations" in stats) {
+          const { eliminations, isVictory, placement, gamemode } = stats;
 
-            if (isNaN(attributes.level!)) attributes.level = 1;
-            if (isNaN(attributes.xp!)) attributes.xp = 0;
+          const lootList: Lootlist[] = [];
 
-            const updater = await RewardsManager.addGrant(pastSeason);
-            const lootList: { itemType: string; itemGuid: string; quantity: number }[] = [];
+          let currency = eliminations * 50;
+          if (isVictory) {
+            currency += 200;
+          }
 
-            if (!updater) continue;
+          for (const pastSeason of athena.stats.attributes!.past_seasons!) {
+            if (pastSeason.seasonNumber === config.currentSeason) {
+              pastSeason.numWins += isVictory ? 1 : 0;
 
-            // so unproper but idc, it works
-            updater.items.forEach(async (val) => {
-              switch (val.type) {
-                case "athena":
-                  if (val.templateId.toLowerCase().includes("cosmeticvarianttoken:")) {
-                    const tokens = await BattlepassManager.GetCosmeticVariantTokenReward();
+              const [seasonStats] = await Promise.all([
+                seasonStatsService.findStatByAccountId(user.accountId, gamemode),
+              ]);
 
-                    const vtidMapping: { [key: string]: string } = {
-                      vtid_655_razerzero_styleb: "VTID_655_RazerZero_StyleB",
-                      vtid_656_razerzero_stylec: "VTID_656_RazerZero_StyleC",
-                      vtid_949_temple_styleb: "VTID_949_Temple_StyleB",
-                      vtid_934_progressivejonesy_backbling_styleb:
-                        "VTID_934_ProgressiveJonesy_Backbling_StyleB",
-                      vtid_940_dinohunter_styleb: "VTID_940_DinoHunter_StyleB",
-                      vtid_937_progressivejonesy_backbling_stylee:
-                        "VTID_937_ProgressiveJonesy_Backbling_StyleE",
-                      vtid_935_progressivejonesy_backbling_stylec:
-                        "VTID_935_ProgressiveJonesy_Backbling_StyleC",
-                      vtid_933_chickenwarrior_backbling_stylec:
-                        "VTID_933_ChickenWarrior_Backbling_StyleC",
-                      vtid_943_chickenwarrior_stylec: "VTID_943_ChickenWarrior_StyleC",
-                      vtid_956_chickenwarriorglider_stylec: "VTID_956_ChickenWarriorGlider_StyleC",
-                      vtid_936_progressivejonesy_backbling_styled:
-                        "VTID_936_ProgressiveJonesy_Backbling_StyleD",
-                      vtid_938_obsidian_styleb: "VTID_938_Obsidian_StyleB",
+              if (!seasonStats) {
+                return c.json(
+                  errors.createError(404, c.req.url, "Season stats not found.", timestamp),
+                  404,
+                );
+              }
+
+              // Update the top placements from, 25, 10, 6, 12, 5, 3, 1.
+              switch (placement) {
+                case 25:
+                  seasonStats.top25 += 1;
+                  break;
+                case 10:
+                  seasonStats.top10 += 1;
+                  break;
+                case 6:
+                  seasonStats.top6 += 1;
+                  break;
+                case 12:
+                  seasonStats.top12 += 1;
+                  break;
+                case 5:
+                  seasonStats.top5 += 1;
+                  break;
+                case 3:
+                  seasonStats.top3 += 1;
+                  break;
+                case 1:
+                  seasonStats.top1 += 1;
+
+                  const lootList: Lootlist[] = [];
+
+                  const reward = "AthenaGlider:Umbrella_Season_06";
+
+                  const existingReward = athena.items[reward];
+
+                  if (!existingReward) {
+                    lootList.push({
+                      itemType: reward,
+                      itemGuid: reward,
+                      itemProfile: "athena",
+                      quantity: 1,
+                    });
+
+                    changes.push({
+                      itemType: reward,
+                      itemGuid: reward,
+                      quantity: 1,
+                    });
+
+                    athena.items[reward] = {
+                      templateId: reward,
+                      attributes: {
+                        max_level_bonus: 0,
+                        level: 1,
+                        item_seen: false,
+                        xp: 0,
+                        variants: [],
+                        favorite: false,
+                      },
+                      quantity: 1,
                     };
 
-                    const reward =
-                      tokens[vtidMapping[val.templateId.replace("CosmeticVariantToken:", "")]];
-                    if (!reward) return;
+                    const exsistingTheUmbrellaReward = athena.items["AthenaGlider:Solo_Umbrella"];
 
-                    let parts = reward.templateId.split(":");
-                    parts[1] = parts[1].toLowerCase();
-
-                    let templateId = parts.join(":");
-
-                    const Item = athena.items[templateId];
-                    if (!Item) return;
-
-                    const newVariant = athena.items[templateId]?.attributes?.variants ?? [];
-
-                    const existingVariant = newVariant.find(
-                      (variant) => variant.channel === reward.channel,
-                    );
-
-                    if (existingVariant) {
-                      existingVariant.owned.push(reward.value);
-                    } else {
-                      newVariant.push({
-                        channel: reward.channel,
-                        active: reward.value,
-                        owned: [reward.value],
+                    if (!exsistingTheUmbrellaReward) {
+                      changes.push({
+                        itemType: "AthenaGlider:Solo_Umbrella",
+                        itemGuid: "AthenaGlider:Solo_Umbrella",
+                        quantity: 1,
                       });
-                    }
-                  }
 
-                  athena.items[val.templateId] = {
-                    templateId: val.templateId,
-                    // @ts-ignore
-                    attributes: val.attributes,
-                    quantity: val.quantity,
-                  };
-                  break;
-                case "common_core":
-                  if (val.templateId.includes("Currency")) {
-                    let found = false;
-                    for (const itemId in common_core.items) {
-                      if (common_core.items[itemId].templateId === val.templateId) {
-                        common_core.items[itemId].quantity += val.quantity;
-                        found = true;
-                        break;
-                      }
-                    }
-                    if (!found) {
-                      common_core.items[val.templateId] = {
-                        templateId: val.templateId,
-                        // @ts-ignore
-                        attributes: val.attributes,
-                        quantity: val.quantity,
+                      lootList.push({
+                        itemType: "AthenaGlider:Solo_Umbrella",
+                        itemGuid: "AthenaGlider:Solo_Umbrella",
+                        itemProfile: "athena",
+                        quantity: 1,
+                      });
+
+                      athena.items["AthenaGlider:Solo_Umbrella"] = {
+                        templateId: "AthenaGlider:Solo_Umbrella",
+                        attributes: {
+                          max_level_bonus: 0,
+                          level: 1,
+                          item_seen: false,
+                          xp: 0,
+                          variants: [],
+                          favorite: false,
+                        },
+                        quantity: 1,
                       };
                     }
-                  } else {
-                    common_core.items[val.templateId] = {
-                      templateId: val.templateId,
-                      // @ts-ignore
-                      attributes: val.attributes,
-                      quantity: val.quantity,
-                    };
                   }
-                  break;
 
-                case "athenaseasonxpboost":
-                  attributes.season_match_boost =
-                    (attributes.season_match_boost || 0) + val.quantity;
+                  if (lootList.length > 0) {
+                    changes.push({
+                      itemType: reward,
+                      itemGuid: reward,
+                      quantity: 1,
+                    });
+
+                    const giftBoxItemTemplate = {
+                      templateId: "GiftBox:GB_SeasonFirstWin",
+                      attributes: {
+                        max_level_bonus: 0,
+                        fromAccountId: "Server",
+                        lootList,
+                      },
+                      quantity: 1,
+                    };
+
+                    common_core.items[giftBoxItemTemplate.templateId] = giftBoxItemTemplate;
+                    common_core.stats.attributes.gifts!.push(giftBoxItemTemplate);
+                  }
+
                   break;
-                case "athenaseasonfriendxpboost":
-                  attributes.season_friend_match_boost =
-                    (attributes.season_friend_match_boost || 0) + val.quantity;
+              }
+
+              seasonStats.wins += isVictory ? 1 : 0;
+              seasonStats.kills += eliminations;
+              seasonStats.matchesplayed += 1;
+
+              // Grant vbucs from top 10 onwards.
+              if (seasonStats.top10 >= 10) {
+                currency += 10;
+              }
+
+              switch (gamemode) {
+                case "solos":
+                  await seasonStatsService.update(user.accountId, seasonStats);
+                  break;
+                case "duos":
+                  await seasonStatsService.update(user.accountId, seasonStats);
+
+                  break;
+                case "squads":
+                  await seasonStatsService.update(user.accountId, seasonStats);
+
+                  break;
+                case "ltm":
+                  await seasonStatsService.update(user.accountId, seasonStats);
+
                   break;
               }
 
               lootList.push({
-                itemType: val.templateId,
-                itemGuid: val.templateId,
-                quantity: val.quantity,
+                itemType: "Currency:MtxPurchased",
+                itemGuid: "Currency:MtxPurchased",
+                itemProfile: "common_core",
+                quantity: currency,
               });
-            });
 
-            if (updater.canGrantItems) {
-              common_core.stats.attributes.gifts!.push({
-                templateId: "GiftBox:gb_battlepass",
+              changes.push({
+                itemType: "Currency:MtxPurchased",
+                itemGuid: "Currency:MtxPurchased",
+                quantity: currency,
+              });
+
+              common_core.items["GiftBox:GB_MakeGood"] = {
+                templateId: "GiftBox:GB_MakeGood",
                 attributes: {
+                  max_level_bonus: 0,
+                  fromAccountId: "Server",
                   lootList,
                 },
                 quantity: 1,
-              });
+              };
+
+              common_core.items["Currency:MtxPurchased"].quantity += currency;
+              changes.push({ amountGained: currency, stats: seasonStats });
+              break;
+            }
+          }
+        } else if (matchType === "levels" && "totalXp" in stats) {
+          const { totalXp } = stats;
+          const { attributes } = athena.stats;
+
+          for (const pastSeason of attributes.past_seasons!) {
+            if (pastSeason.seasonNumber === config.currentSeason) {
+              pastSeason.seasonXp += totalXp;
+
+              if (isNaN(attributes.level!)) attributes.level = 1;
+              if (isNaN(attributes.xp!)) attributes.xp = 0;
+
+              const updater = await RewardsManager.addGrant(
+                pastSeason,
+                user.accountId,
+                user.username,
+              );
+
+              if (updater) {
+                updater.items.forEach(async (val) => {
+                  common_core.stats.attributes.gifts!.push({
+                    templateId: "GiftBox:gb_battlepass",
+                    attributes: {
+                      lootList: updater.items.map((item) => ({
+                        itemType: item.templateId,
+                        itemGuid: item.templateId,
+                        itemProfile: item.type,
+                        quantity: item.quantity,
+                      })),
+                    },
+                    quantity: 1,
+                  });
+                });
+
+                attributes.level = updater.pastSeasons.seasonLevel;
+                attributes.book_level = updater.pastSeasons.bookLevel;
+                attributes.xp! += updater.pastSeasons.seasonXp;
+                attributes.accountLevel! += 1;
+                attributes.last_xp_interaction = new Date().toISOString();
+
+                changes.push({
+                  level: attributes.level,
+                  book_level: attributes.book_level,
+                  xp: attributes.xp,
+                  last_xp_interaction: attributes.last_xp_interaction,
+                });
+              }
+            }
+          }
+        } else if (matchType === "quest" && "quest" in stats) {
+          const { questId, updates } = stats.quest;
+
+          const quest = Array.from(QuestManager.listedWeeklyQuests).find((q) => q.Name === questId);
+
+          const dbQuest = await questsService.findQuestByTemplateId(
+            user.accountId,
+            config.currentSeason,
+            questId,
+          );
+
+          if (!dbQuest) {
+            return c.json(errors.createError(404, c.req.url, "Quest not found.", timestamp), 404);
+          }
+
+          if (quest && dbQuest.entity.quest_state !== "Completed") {
+            for (const objectives of quest.Objects) {
+              const objectiveStates = objectives.Objectives.reduce(
+                (acc, { Count }) => ({ ...acc, Count }),
+                { Count: 0 },
+              );
+
+              for (const pastSeason of athena.stats.attributes.past_seasons!) {
+                const state =
+                  pastSeason.seasonXp >= objectiveStates.Count
+                    ? "Completed"
+                    : dbQuest.entity.quest_state;
+
+                dbQuest.entity[`completion_${objectives.Name}`] = Math.min(
+                  pastSeason.seasonXp,
+                  objectiveStates.Count,
+                );
+                dbQuest.entity.quest_state = state;
+
+                await questsService.updateQuest(
+                  dbQuest,
+                  user.accountId,
+                  config.currentSeason,
+                  questId,
+                );
+
+                if (state === "Completed") {
+                  const challengeBundleScheduleId = `ChallengeBundle:${quest.Name}`;
+
+                  const bundleInDb = await questsService.findQuestByTemplateId(
+                    user.accountId,
+                    config.currentSeason,
+                    challengeBundleScheduleId,
+                  );
+
+                  if (!bundleInDb) {
+                    return c.json(
+                      errors.createError(404, c.req.url, "Bundle not found.", timestamp),
+                      404,
+                    );
+                  }
+
+                  bundleInDb.entity.num_quests_completed += 1;
+                  bundleInDb.entity.num_progress_quests_completed += 1;
+                  bundleInDb.entity.last_state_change_time = new Date().toISOString();
+
+                  await questsService.updateQuest(
+                    bundleInDb,
+                    user.accountId,
+                    config.currentSeason,
+                    challengeBundleScheduleId,
+                  );
+                }
+              }
+            }
+          }
+          if (updates) {
+            const questInDb = await questsService.findQuestByTemplateId(
+              user.accountId,
+              config.currentSeason,
+              updates.BackendName,
+            );
+
+            if (!questInDb) {
+              return c.json(errors.createError(404, c.req.url, "Quest not found.", timestamp), 404);
             }
 
-            attributes.level = updater.pastSeasons.seasonLevel;
-            attributes.book_level = updater.pastSeasons.bookLevel;
-            attributes.xp! += updater.pastSeasons.seasonXp;
-            attributes.accountLevel! += 1;
+            if (questInDb.entity.quest_state === "Completed") return;
 
-            attributes.last_xp_interaction = new Date().toISOString();
+            const dailyQuest = Array.from(
+              QuestManager.listedQuests[QuestType.REPEATABLE].values(),
+            ).find((val) => val.Name === updates.BackendName.replace("Quest:", ""));
+            if (!dailyQuest) {
+              return c.json(errors.createError(404, c.req.url, "Quest not found.", timestamp), 404);
+            }
 
-            changes.push({
-              level: attributes.level,
-              book_level: attributes.book_level,
-              xp: attributes.xp,
-              last_xp_interaction: attributes.last_xp_interaction,
-            });
+            const objectiveStates = dailyQuest.Properties.Objectives.reduce(
+              (acc, { Count, BackendName }) => ({ ...acc, [BackendName]: Count }),
+              { Count: 0, BackendName: "" },
+            );
 
-            await RefreshAccount(user.accountId, user.username);
+            let completionValue =
+              questInDb.entity[`completion_${objectiveStates.BackendName}`] ?? 0;
+            if (completionValue < objectiveStates.Count) {
+              completionValue += updates.Count;
+
+              await questsService.updateQuest(
+                questInDb,
+                user.accountId,
+                config.currentSeason,
+                updates.BackendName,
+              );
+            }
+
+            if (completionValue >= objectiveStates.Count) {
+              for (const pastSeason of athena.stats.attributes.past_seasons!) {
+                const { book_xp = 0, book_level = 1 } = athena.stats.attributes;
+
+                const updatedStats = LevelsManager.updateXpAndLevel(book_xp, book_level, 5);
+                athena.stats.attributes.book_xp = updatedStats.bookXp;
+                athena.stats.attributes.book_level = updatedStats.bookLevel;
+
+                pastSeason.seasonXp += 500;
+
+                await questsService.deleteQuestByTemplateId(
+                  user.accountId,
+                  config.currentSeason,
+                  updates.BackendName,
+                );
+              }
+            }
           }
         }
 
-        await profilesService.update(user.accountId, "athena", athena);
-        await profilesService.update(user.accountId, "common_core", common_core);
+        await profilesService.updateMultiple([
+          { accountId: user.accountId, type: "athena", data: athena },
+          { accountId: user.accountId, type: "common_core", data: common_core },
+        ]);
 
         await RefreshAccount(user.accountId, user.username);
 
-        return c.json(MCPResponses.generate(athena, changes, "athena"));
+        return c.json(
+          MCPResponses.generate(
+            matchType === "vbucks" ? common_core : athena,
+            changes,
+            matchType === "vbucks" ? "common_core" : "athena",
+          ),
+        );
       } catch (error) {
-        return c.json(errors.createError(500, c.req.url, "Internal Server Error", timestamp), 500);
+        logger.error(`Error applying match stats: ${error}`);
+        return c.json(errors.createError(500, c.req.url, "Internal server error.", timestamp), 500);
       }
     },
   );

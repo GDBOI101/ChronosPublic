@@ -1,4 +1,4 @@
-import { app, itemStorageService, userService } from "..";
+import { app, config, itemStorageService, userService } from "..";
 import axios from "axios";
 import uaparser from "../utilities/uaparser";
 import errors from "../utilities/errors";
@@ -31,7 +31,7 @@ export default function () {
 
     if (uahelper.season === 0) return c.json({});
 
-    const storefrontData = await itemStorageService.getItemByType("storefront");
+    const [storefrontData] = await Promise.all([itemStorageService.getItemByType("storefront")]);
 
     if (!storefrontData)
       return c.json(
@@ -39,6 +39,45 @@ export default function () {
         400,
       );
 
-    return c.json(storefrontData.data);
+    // const ProfileRevisions = c.req.header("X-Epic-ProfileRevisions");
+
+    // if (!ProfileRevisions)
+    //   return c.json(
+    //     errors.createError(
+    //       400,
+    //       c.req.url,
+    //       "header 'X-Epic-ProfileRevisions' is missing.",
+    //       timestamp,
+    //     ),
+    //     400,
+    //   );
+
+    // const revisions = JSON.parse(ProfileRevisions);
+
+    // const clientCommandRevision = revisions.find(
+    //   (rev: any) => rev.profileId === "athena",
+    // ).clientCommandRevision;
+
+    // if (!clientCommandRevision) {
+    //   return c.json(
+    //     errors.createError(
+    //       400,
+    //       c.req.url,
+    //       "Failed to get clientCommandRevision from X-Epic-ProfileRevisions.",
+    //       timestamp,
+    //     ),
+    //     400,
+    //   );
+    // }
+
+    if (uahelper.season === config.currentSeason) {
+      return c.json(storefrontData.data);
+    } else {
+      return c.json([]);
+    }
+  });
+
+  app.get("/catalog/api/shared/bulk/offers", async (c) => {
+    return c.json([]);
   });
 }

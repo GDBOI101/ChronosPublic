@@ -16,7 +16,7 @@ export const SEASON_EVENTS: SeasonEvent[] = [
     seasonNumber: 3,
     events: [
       {
-        eventType: "Spring2018Phase1",
+        eventType: "EventFlag.Spring2018Phase1",
         activeUntil,
         activeSince: "2020-01-01T00:00:00.000Z",
       },
@@ -26,12 +26,37 @@ export const SEASON_EVENTS: SeasonEvent[] = [
     seasonNumber: 4,
     events: [
       {
-        eventType: "Blockbuster2018",
+        eventType: "EventFlag.Blockbuster2018",
         activeUntil,
         activeSince: "2020-01-01T00:00:00.000Z",
       },
       {
-        eventType: "Blockbuster2018Phase1",
+        eventType: "EventFlag.Blockbuster2018Phase1",
+        activeUntil,
+        activeSince: "2020-01-01T00:00:00.000Z",
+      },
+    ],
+  },
+  {
+    seasonNumber: 6,
+    events: [
+      {
+        eventType: "EventFlag.LTM_Fortnitemares",
+        activeUntil,
+        activeSince: "2020-01-01T00:00:00.000Z",
+      },
+      {
+        eventType: "EventFlag.FortnitemaresPhase1",
+        activeUntil,
+        activeSince: "2020-01-01T00:00:00.000Z",
+      },
+      {
+        eventType: "EventFlag.LTM_LilKevin",
+        activeUntil,
+        activeSince: "2020-01-01T00:00:00.000Z",
+      },
+      {
+        eventType: "EventFlag.LobbySeason6Halloween",
         activeUntil,
         activeSince: "2020-01-01T00:00:00.000Z",
       },

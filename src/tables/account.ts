@@ -1,21 +1,6 @@
 import { BaseEntity, Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 import type { Permission } from "../../types/permissionsdefs";
 
-export interface SeasonStats {
-  wins: number;
-  kills: number;
-  matchesplayed: number;
-  top25: number;
-  top10: number;
-  top1: number;
-}
-
-export interface Stats {
-  solos: SeasonStats;
-  duos: SeasonStats;
-  squads: SeasonStats;
-  ltm: SeasonStats;
-}
 
 export interface FortniteReceipts {
   appStore: string;
@@ -35,14 +20,9 @@ export class Account extends BaseEntity {
   @Column({ type: "varchar", length: 255, nullable: false })
   discordId!: string;
 
-  @Column({ type: "json", nullable: false, default: {} })
-  stats!: Stats;
 
   @Column({ type: "jsonb", nullable: false, default: [] })
   permissions!: Permission[];
-
-  @Column({ type: "jsonb", nullable: false, default: [] })
-  receipts!: FortniteReceipts[];
 
   @Column({ nullable: false, default: 0 })
   arenaHype!: number;

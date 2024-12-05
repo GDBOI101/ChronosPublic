@@ -2,7 +2,7 @@ import path from "node:path";
 import { config, logger, profilesService } from "../..";
 import type { BattlePassStorefront } from "../../shop/interfaces/Declarations";
 import type { ProfileId } from "../responses";
-import ProfileHelper from "../profiles";
+import ProfileHelper from "../ProfileHelper";
 import { Profiles } from "../../tables/profiles";
 import type { Variants } from "../../../types/profilesdefs";
 

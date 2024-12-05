@@ -8,7 +8,7 @@ import presence from "./roots/presence";
 import { XmppService } from "./saved/XmppServices";
 import message from "./roots/message";
 
-export interface ChronosSocket extends ServerWebSocket {
+export interface LyntSocket extends ServerWebSocket {
   isLoggedIn?: boolean;
   isAuthenticated?: boolean;
   accountId?: string;
@@ -16,7 +16,7 @@ export interface ChronosSocket extends ServerWebSocket {
   displayName?: string;
   jid?: string;
   resource?: string;
-  socket?: ServerWebSocket<ChronosSocket> | null;
+  socket?: ServerWebSocket<LyntSocket> | null;
 }
 
 export interface XmppClient {
@@ -25,7 +25,7 @@ export interface XmppClient {
   token: string;
   jid: string;
   resource: string;
-  socket: ServerWebSocket<ChronosSocket>;
+  socket: ServerWebSocket<LyntSocket>;
   lastPresenceUpdate: {
     away: boolean;
     status: string;
@@ -33,10 +33,10 @@ export interface XmppClient {
 }
 
 export class Client {
-  private socket: ServerWebSocket<ChronosSocket>;
+  private socket: ServerWebSocket<LyntSocket>;
   private message: string | Buffer;
 
-  constructor(socket: ServerWebSocket<ChronosSocket>, message: string | Buffer) {
+  constructor(socket: ServerWebSocket<LyntSocket>, message: string | Buffer) {
     this.socket = socket;
     this.message = message;
 
@@ -52,6 +52,8 @@ export class Client {
     const xmlDoc = xmlparser(this.message as string);
 
     const { name } = xmlDoc.root;
+
+    logger.info(`Received root '${name}'.`);
 
     switch (name) {
       case "open":

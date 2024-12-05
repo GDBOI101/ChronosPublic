@@ -100,21 +100,7 @@ export namespace Validation {
     if (user.banned)
       return c.json(errors.createError(403, c.req.url, "This user is banned.", timestamp), 403);
 
-    const grantMap: { [key: string]: GrantType } = {
-      client_credentials: "client_credentials",
-      authorization_code: "authorization_code",
-      refresh_token: "refresh_token",
-    };
-
-    c.set(
-      "permission",
-      new PermissionInfo(
-        user.accountId,
-        user.username,
-        "3446cd72694c4a4485d81b77adbb2141",
-        grantMap[accessToken.grant],
-      ),
-    );
+    c.set("permission", new PermissionInfo(user.accountId));
 
     await next();
   }

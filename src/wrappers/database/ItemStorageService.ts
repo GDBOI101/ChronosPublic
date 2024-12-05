@@ -4,11 +4,9 @@ import Database from "../Database.wrapper";
 
 export class ItemStorageService {
   private itemRepository: Repository<Item>;
-  private itemCache: Map<ItemTypes, Item>;
 
   constructor(private database: Database) {
     this.itemRepository = this.database.getRepository("item");
-    this.itemCache = new Map<ItemTypes, Item>();
   }
 
   public async addItems(data: { data: unknown | unknown[]; type: ItemTypes }[]): Promise<Item[]> {
@@ -44,7 +42,6 @@ export class ItemStorageService {
         }
 
         const allItems = [...newItems, ...updatedItems];
-        allItems.forEach((item) => this.itemCache.set(item.type, item));
 
         return allItems;
       },
@@ -52,14 +49,8 @@ export class ItemStorageService {
   }
 
   public async getItemByType(type: ItemTypes): Promise<Item | null> {
-    if (this.itemCache.has(type)) {
-      return this.itemCache.get(type) || null;
-    }
-
     const item = await this.itemRepository.findOne({ where: { type } });
-    if (item) {
-      this.itemCache.set(item.type, item);
-    }
+
     return item;
   }
 
@@ -68,7 +59,6 @@ export class ItemStorageService {
 
     const result = await this.itemRepository.delete({ type: In(types) });
     if (result.affected! > 0) {
-      types.forEach((type) => this.itemCache.delete(type));
       return true;
     }
 
@@ -77,22 +67,7 @@ export class ItemStorageService {
 
   public async getAllItems(): Promise<Item[]> {
     const items = await this.itemRepository.find();
-    items.forEach((item) => this.itemCache.set(item.type, item));
+
     return items;
-  }
-
-  public async getItemsByTypes(types: ItemTypes[]): Promise<Item[]> {
-    const cachedItems = types
-      .map((type) => this.itemCache.get(type))
-      .filter((item) => item !== undefined) as Item[];
-    const typesToFetch = types.filter((type) => !this.itemCache.has(type));
-
-    if (typesToFetch.length > 0) {
-      const fetchedItems = await this.itemRepository.find({ where: { type: In(typesToFetch) } });
-      fetchedItems.forEach((item) => this.itemCache.set(item.type, item));
-      return [...cachedItems, ...fetchedItems];
-    }
-
-    return cachedItems;
   }
 }

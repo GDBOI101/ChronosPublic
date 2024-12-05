@@ -51,7 +51,7 @@ export default class errors {
         errorMessage: message,
         messageVars: [],
         numericErrorCode: code,
-        originatingService: "Chronos",
+        originatingService: "Lynt",
         intent: "prod-live",
         createdAt: timestamp,
       }).getError();
@@ -62,7 +62,7 @@ export default class errors {
       errorMessage: message,
       messageVars: [sanitizedRoute],
       numericErrorCode: code,
-      originatingService: "Chronos",
+      originatingService: "Lynt",
       intent: "prod-live",
       createdAt: timestamp,
     };

@@ -1,17 +1,15 @@
-import { config } from "..";
+import { config, logger } from "..";
 
 export function GetDefaultEngine(): string {
   return `[OnlineSubsystemMcp.Xmpp]
-Protocol=${config.tcp ? "tcp" : "ws"}
-ServerAddr="${config.tcp ? "127.0.0.1" : "ws://127.0.0.1:8080"}"
-ServerPort=${config.tcp ? "7777" : "8080"}
-${config.tcp ? "bUsePlainTextAuth=true" : ""}
+bUseSSL=false
+ServerAddr="ws://127.0.0.1"
+ServerPort=81
 
 [OnlineSubsystemMcp.Xmpp Prod]
-Protocol=${config.tcp ? "tcp" : "ws"}
-ServerAddr="${config.tcp ? "127.0.0.1" : "ws://127.0.0.1:8080"}"
-ServerPort=${config.tcp ? "7777" : "8080"}
-${config.tcp ? "bUsePlainTextAuth=true" : ""}
+bUseSSL=false
+ServerAddr="ws://127.0.0.1"
+ServerPort=81
 
 [OnlineSubsystemMcp]
 bUsePartySystemV2=false
@@ -97,7 +95,7 @@ export function GetDefaultGame(version: number): string {
   let def: string = `[/Script/EngineSettings.GeneralProjectSettings]
 ProjectID=(A=-2011270876,B=1182903154,C=-965786730,D=-1399474123)
 ProjectName=Fortnite
-ProjectDisplayedTitle=NSLOCTEXT("Chronos", "FortniteMainWindowTitle", "Chronos")
+ProjectDisplayedTitle=NSLOCTEXT("Lynt", "FortniteMainWindowTitle", "Lynt")
 ProjectVersion=1.0.0
 CompanyName=Epic Games, Inc.
 CompanyDistinguishedName="CN=Epic Games, O=Epic Games, L=Cary, S=North Carolina, C=US"
@@ -148,6 +146,7 @@ bBattleRoyaleMatchmakingEnabled=true
 FrontEndPlaylistData=(PlaylistName=Playlist_DefaultSolo, PlaylistAccess=(bEnabled=True, bIsDefaultPlaylist=true, bVisibleWhenDisabled=false, bDisplayAsNew=false, CategoryIndex=0, bDisplayAsLimitedTime=false, DisplayPriority=3))
 +FrontEndPlaylistData=(PlaylistName=Playlist_DefaultDuo, PlaylistAccess=(bEnabled=True, bIsDefaultPlaylist=true, bVisibleWhenDisabled=false, bDisplayAsNew=false, CategoryIndex=0, bDisplayAsLimitedTime=false, DisplayPriority=4))
 +FrontEndPlaylistData=(PlaylistName=Playlist_DefaultSquad, PlaylistAccess=(bEnabled=True, bIsDefaultPlaylist=true, bVisibleWhenDisabled=false, bDisplayAsNew=false, CategoryIndex=0, bDisplayAsLimitedTime=false, DisplayPriority=6))
++FrontEndPlaylistData=(PlaylistName=Playlist_PlaygroundV2, PlaylistAccess=(bEnabled=False, bIsDefaultPlaylist=false, bVisibleWhenDisabled=true, bDisplayAsNew=true, CategoryIndex=1, bDisplayAsLimitedTime=false, DisplayPriority=15))
 +FrontEndPlaylistData=(PlaylistName=Playlist_BattleLab, PlaylistAccess=(bEnabled=False, bIsDefaultPlaylist=false, bVisibleWhenDisabled=true, bDisplayAsNew=false, CategoryIndex=1, bDisplayAsLimitedTime=false, DisplayPriority=16))
 
 ; Arena
@@ -212,11 +211,14 @@ bLeavePartyOnDisconnect=false
 bSetDesiredPrivacyOnLocalPlayerBecomesLeader=false
 DefaultMaxPartySize=16`;
 
-  if (version === 4) {
+  logger.debug(`Version: ${version}`);
+
+  if (version >= 4 && version <= 10) {
     def.replace(
       `+FrontEndPlaylistData=(PlaylistName=Playlist_BattleLab, PlaylistAccess=(bEnabled=False, bIsDefaultPlaylist=false, bVisibleWhenDisabled=true, bDisplayAsNew=false, CategoryIndex=1, bDisplayAsLimitedTime=false, DisplayPriority=16))`,
       `+FrontEndPlaylistData=(PlaylistName=Playlist_Playground, PlaylistAccess=(bEnabled=True, bIsDefaultPlaylist=true, bVisibleWhenDisabled=false, bDisplayAsNew=true, CategoryIndex=1, bDisplayAsLimitedTime=false, DisplayPriority=16))`,
     );
+    logger.debug("Replaced Battlelab with Playground");
   }
 
   return def;

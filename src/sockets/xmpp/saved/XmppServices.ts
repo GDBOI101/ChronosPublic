@@ -25,14 +25,16 @@ interface PartyConfig {
   joinability: string;
 }
 
-interface PartyMember {
+export interface PartyMember {
   account_id: string;
-  meta: any;
+  role: string;
+  meta: Record<string, any>;
   connections: Connection[];
   revision: number;
+  captain?: string;
   updated_at: string;
   joined_at: string;
-  role: string;
+  jid?: string;
 }
 
 interface Connection {
@@ -40,7 +42,7 @@ interface Connection {
   connected_at: string;
   updated_at: string;
   yield_leadership: boolean;
-  meta: any;
+  meta: Record<string, any>;
 }
 
 interface Pings {

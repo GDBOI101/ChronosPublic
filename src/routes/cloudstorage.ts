@@ -86,7 +86,7 @@ export default function () {
   app.get("/fortnite/api/cloudstorage/user/:accountId/:file", Validation.verifyToken, async (c) => {
     const clientSettings: string = path.join(
       process.env.LOCALAPPDATA as string,
-      "Chronos",
+      "Lynt",
       "ClientSettings",
     );
 
@@ -122,7 +122,7 @@ export default function () {
   app.get("/fortnite/api/cloudstorage/user/:accountId", Validation.verifyToken, async (c) => {
     const clientSettings: string = path.join(
       process.env.LOCALAPPDATA as string,
-      "Chronos",
+      "Lynt",
       "ClientSettings",
     );
     if (!existsSync(clientSettings)) {
@@ -181,7 +181,7 @@ export default function () {
 
       const clientSettings: string = path.join(
         process.env.LOCALAPPDATA as string,
-        "Chronos",
+        "Lynt",
         "ClientSettings",
       );
       if (!existsSync(clientSettings)) await mkdir(clientSettings);

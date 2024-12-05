@@ -1,11 +1,12 @@
-import { config, logger, userService } from "../..";
+import { config, logger, serversService, userService } from "../..";
 import { Encryption } from "../../utilities/encryption";
 import { MatchmakerStates } from "./mmstates";
 import { v4 as uuid } from "uuid";
 import { isPartyMemberExists } from "./utilities/isPartyMemberExists";
 import { removeClientFromQueue } from "./utilities/removeClientFromQueue";
-import { ServerStatus, type HostServer } from "../gamesessions/types";
 import { RegionIps } from "../../../hosting/hostOptions";
+import { ServerStatus, type Servers } from "../../tables/servers";
+import type { PartyMember } from "../xmpp/saved/XmppServices";
 
 interface MatchmakerAttributes {
   "player.userAgent": string;
@@ -37,6 +38,7 @@ export interface MatchmakerSocket {
   region: string;
   userAgent: string;
   playlist: string;
+  partyMembers: PartyMember[];
 }
 
 export type Socket = {
@@ -49,35 +51,41 @@ async function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export const servers: HostServer[] = [];
-
-function findOrCreateServer(payload: MatchmakerSocket): HostServer {
-  let existingServer = servers.find(
-    (server) => server.identifier === payload.bucketId && server.options.region === payload.region,
+async function findOrCreateServer(payload: MatchmakerSocket): Promise<Servers> {
+  let existingServer = await serversService.getServerByIdentifier(
+    payload.bucketId,
+    payload.region,
+    payload.attributes["player.season"],
+    7777,
   );
 
   if (!existingServer) {
     const config = RegionIps[payload.region];
     if (!config) {
       logger.error(`No hoster found for the region: ${payload.region}`);
+      throw new Error("Region configuration missing");
     }
 
-    existingServer = {
-      sessionId: uuid(),
-      status: ServerStatus.OFFLINE,
-      version: payload.attributes["player.season"],
-      identifier: payload.bucketId,
-      address: config.address,
-      port: config.port,
-      queue: [],
-      options: {
-        region: payload.region,
-        matchId: payload.matchId,
-        playlist: payload.playlist,
-        userAgent: payload.userAgent,
-      },
-    };
-    servers.push(existingServer);
+    try {
+      existingServer = await serversService.createServer({
+        sessionId: payload.sessionId,
+        status: ServerStatus.OFFLINE,
+        version: payload.attributes["player.season"],
+        identifier: payload.bucketId,
+        address: config.address,
+        port: config.port,
+        queue: [],
+        options: {
+          region: payload.region,
+          userAgent: payload.userAgent,
+          matchId: payload.matchId,
+          playlist: payload.playlist,
+        },
+      });
+    } catch (error) {
+      logger.error(`Failed to create server: ${error}`);
+      throw new Error("Error creating server");
+    }
   }
 
   return existingServer;
@@ -141,13 +149,38 @@ export const matchmakerServer = Bun.serve<Socket>({
           return socket.close(1011, "Party not found!");
         }
 
-        const existingServer = findOrCreateServer(payload);
+        let existingServer: Servers | null = null;
+
+        if (!existingServer) {
+          existingServer = await findOrCreateServer(payload);
+        }
+
+        if ("members" in foundParty && foundParty.members.length > 1) {
+          const partyMemberIds = foundParty.members.map((member) => member.account_id);
+          const newMembers = partyMemberIds.filter((id) => !existingServer!.queue.includes(id));
+
+          if (newMembers.length > 0) {
+            existingServer.queue.push(...newMembers);
+            existingServer.updatedAt = new Date();
+            await serversService.updateServerQueue(
+              payload.bucketId,
+              payload.region,
+              7777,
+              existingServer.queue,
+            );
+          }
+        }
 
         if (!existingServer.queue.includes(accountId)) {
           existingServer.queue.push(accountId);
+          existingServer.updatedAt = new Date();
+          await serversService.updateServerQueue(
+            payload.bucketId,
+            payload.region,
+            7777,
+            existingServer.queue,
+          );
         }
-
-        logger.debug(`Server updated with new user for session ${existingServer.sessionId}`);
 
         MatchmakerStates.connecting(socket);
         MatchmakerStates.waiting(socket, foundParty);
@@ -155,43 +188,52 @@ export const matchmakerServer = Bun.serve<Socket>({
 
         while (existingServer.status !== ServerStatus.ONLINE && existingServer.queue.length > 0) {
           await wait(2000);
-          const refreshedServer = servers.find(
-            (server) => server.identifier === existingServer.identifier,
+
+          const refreshedServer = await serversService.getServerByIdentifier(
+            existingServer.identifier,
+            existingServer.options.region,
+            payload.attributes["player.season"],
+            existingServer.port,
           );
+
           if (!refreshedServer) {
             return socket.close(1011, "Server not found");
           }
-          existingServer.status = refreshedServer.status;
+
+          existingServer = refreshedServer;
         }
 
         if (existingServer.status === ServerStatus.ONLINE) {
-          removeClientFromQueue(foundParty, existingServer.queue);
+          await removeClientFromQueue(foundParty, existingServer.queue);
+          await serversService.updateServerQueue(
+            existingServer.identifier,
+            region,
+            existingServer.port,
+            existingServer.queue,
+          );
+
           MatchmakerStates.sessionAssignment(socket, existingServer.options.matchId);
           MatchmakerStates.join(socket, existingServer.sessionId, existingServer.options.matchId);
         } else {
           socket.close(1011, "Server took too long to start");
         }
-
-        // servers.forEach((server, index) => {
-        //   if (server.queue.length === 0) {
-        //     servers.splice(index, 1);
-        //     logger.debug(`Removed empty server: ${server.sessionId}`);
-        //   }
-        // });
       } catch (error) {
         logger.error(`Error handling WebSocket open event: ${error}`);
         socket.close(1011, "Internal Server Error");
       }
     },
-    message(socket, message) {
+    async message(socket, message) {
       try {
         logger.debug("Received message");
 
         const payload = socket.data.payload;
-        const { bucketId, region, playlist, userAgent, accountId } = payload;
+        const { bucketId, region, playlist, userAgent, accountId, partyMembers } = payload;
 
-        const existingServer = servers.find(
-          (server) => server.identifier === bucketId && server.options.region === region,
+        const existingServer = await serversService.getServerByIdentifier(
+          payload.bucketId,
+          region,
+          payload.attributes["player.season"],
+          7777,
         );
 
         if (!existingServer) {
@@ -217,15 +259,18 @@ export const matchmakerServer = Bun.serve<Socket>({
         logger.error(`Error handling WebSocket message event: ${error}`);
       }
     },
-    close(socket) {
+    async close(socket) {
       try {
         logger.debug("Closed!");
 
         const payload = socket.data.payload;
         const { bucketId, region, accountId } = payload;
 
-        const existingServer = servers.find(
-          (server) => server.identifier === bucketId && server.options.region === region,
+        const existingServer = await serversService.getServerByIdentifier(
+          payload.bucketId,
+          region,
+          payload.attributes["player.season"],
+          7777,
         );
 
         if (!existingServer) {
@@ -240,14 +285,40 @@ export const matchmakerServer = Bun.serve<Socket>({
         }
 
         existingServer.queue.splice(clientIndex, 1);
+        await serversService.updateServerQueue(bucketId, region, 7777, existingServer.queue);
 
-        if (existingServer.queue.length === 0) {
-          const serverIndex = servers.findIndex(
-            (server) => server.identifier === existingServer.identifier,
-          );
-          if (serverIndex !== -1) {
-            servers.splice(serverIndex, 1);
-            logger.debug(`Removed empty server: ${existingServer.sessionId}`);
+        const partyOrClient = isPartyMemberExists(accountId);
+
+        if (partyOrClient) {
+          if (
+            "members" in partyOrClient &&
+            partyOrClient.members.length === 1 &&
+            partyOrClient.members[0].account_id === accountId
+          ) {
+            if (existingServer.queue.length === 0) {
+              await removeClientFromQueue(partyOrClient, existingServer.queue);
+              await serversService.deleteServerBySessionId(existingServer.sessionId);
+              logger.debug(`Removed empty server: ${existingServer.sessionId}`);
+            }
+          } else {
+            await removeClientFromQueue(partyOrClient, existingServer.queue);
+          }
+
+          const party = isPartyMemberExists(accountId);
+          if (party && "members" in party) {
+            for (const member of party.members) {
+              const memberInQueue = existingServer.queue.find((id) => id === member.account_id);
+
+              if (!memberInQueue) {
+                return socket.close(1000, "Party member is not in queue.");
+              }
+            }
+          }
+        } else {
+          const index = existingServer.queue.indexOf(accountId);
+          if (index !== -1) {
+            existingServer.queue.splice(index, 1);
+            await serversService.updateServerQueue(bucketId, region, 7777, existingServer.queue);
           }
         }
       } catch (error) {

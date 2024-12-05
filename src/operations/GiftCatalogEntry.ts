@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import errors from "../utilities/errors";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import {
   accountService,
   friendsService,

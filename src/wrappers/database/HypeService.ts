@@ -1,4 +1,4 @@
-import type { Repository } from "typeorm";
+import { In, type Repository } from "typeorm";
 import { Hype } from "../../tables/hype";
 import type Database from "../Database.wrapper";
 import { logger } from "../..";
@@ -31,8 +31,12 @@ export default class HypeService {
       maximum_required_hype: max.toString(),
     }));
 
-    const existingEntities = await this.hypeRepository.find();
-    if (existingEntities.length === 0) await this.hypeRepository.save(hypeEntities);
+    const existingEntities = await this.hypeRepository.find({
+      where: { name: In(hypeEntities.filter((x) => x.name).map((x) => x.name)) },
+    });
+    if (existingEntities.length > 0) return;
+
+    await this.hypeRepository.save(hypeEntities);
   }
 
   public async getAll(): Promise<Hype[]> {

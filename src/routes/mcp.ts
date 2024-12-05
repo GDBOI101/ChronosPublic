@@ -2,7 +2,7 @@ import { accountService, app, logger, profilesService, userService } from "..";
 import { loadOperations } from "../utilities/routing";
 import MCPResponses, { type ProfileId } from "../utilities/responses";
 import errors from "../utilities/errors";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import { Validation } from "../middleware/validation";
 import uaparser from "../utilities/uaparser";
 import type { Profiles } from "../tables/profiles";
@@ -56,6 +56,7 @@ export default function () {
       const profile = await handleProfileSelection(profileId, user.accountId);
 
       if (!profile && profileId !== "athena" && profileId !== "common_core")
+        // @ts-ignore
         return c.json(MCPResponses.generate({ rvn }, [], profileId));
 
       if (!profile)
@@ -114,6 +115,7 @@ export default function () {
       const profile = await handleProfileSelection(profileId, user.accountId);
 
       if (!profile && profileId !== "athena" && profileId !== "common_core")
+        // @ts-ignore
         return c.json(MCPResponses.generate({ rvn }, [], profileId));
 
       if (!profile)
@@ -124,7 +126,7 @@ export default function () {
 
       const permissions = c.get("permission");
 
-      const hasPermission = permissions.hasPermission(
+      const hasPermission = await permissions.hasPermission(
         `fortnite:profile:${user.accountId}:commands`,
         "*",
       );
@@ -151,10 +153,10 @@ export default function () {
   );
 
   app.post("/fortnite/api/game/v3/profile/:accountId/client/emptygift", async (c) => {
-    const { playerName } = await c.req.json();
     const timestamp = new Date().toISOString();
+    const accountId = c.req.param("accountId");
 
-    const user = await userService.findUserByUsername(playerName);
+    const user = await userService.findUserByAccountId(accountId);
 
     if (!user)
       return c.json(errors.createError(404, c.req.url, "Failed to find user.", timestamp), 404);
@@ -188,18 +190,6 @@ export default function () {
         400,
       );
 
-    const { receiverPlayerName } = await c.req.json();
-
-    const receiverUser = await userService.findUserByUsername(receiverPlayerName);
-
-    if (!receiverUser)
-      return c.json(errors.createError(404, c.req.url, "Failed to find user.", timestamp), 404);
-
-    const receiverAccount = await accountService.findUserByAccountId(receiverUser.accountId);
-
-    if (!receiverAccount)
-      return c.json(errors.createError(404, c.req.url, "Failed to find account.", timestamp), 404);
-
     athena.rvn++;
     athena.commandRevision++;
     athena.updatedAt = new Date().toISOString();
@@ -210,12 +200,12 @@ export default function () {
 
     await profilesService.updateMultiple([
       {
-        accountId: receiverAccount.accountId,
+        accountId: user.accountId,
         type: "athena",
         data: athena,
       },
       {
-        accountId: receiverAccount.accountId,
+        accountId: user.accountId,
         type: "common_core",
         data: common_core,
       },
@@ -227,7 +217,7 @@ export default function () {
         payload: {},
         timestamp: new Date().toISOString(),
       }),
-      receiverUser.accountId,
+      user.accountId,
     );
 
     return c.json(MCPResponses.generate(common_core, [], "common_core"));

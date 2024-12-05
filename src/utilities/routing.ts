@@ -51,12 +51,11 @@ export async function loadOperations(): Promise<EndpointHandlers> {
     files.map(async (file) => {
       const filePath = join(operationsDir, file);
       const { name } = parse(file);
-
       try {
         const { default: handler } = await import(filePath);
         endpoints[name] = handler;
       } catch (error) {
-        logger.error(`Failed to load operation '${name}} from '${filePath}': ${error}`);
+        logger.error(`Failed to load operation '${name}' from '${filePath}': ${error}`);
       }
     }),
   );

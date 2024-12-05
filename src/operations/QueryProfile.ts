@@ -2,15 +2,16 @@ import type { Context } from "hono";
 import { userService, accountService, logger, profilesService, questsService, config } from "..";
 import errors from "../utilities/errors";
 import type { ProfileId } from "../utilities/responses";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import MCPResponses from "../utilities/responses";
 import uaparser from "../utilities/uaparser";
 import { LRUCache } from "lru-cache";
 import type { IProfile, ItemValue } from "../../types/profilesdefs";
-import type { Attributes, ObjectiveState } from "../tables/storage/other/dailyQuestStorage";
 import { type QuestDictionary, type QuestItem } from "../../types/questdefs";
+import { v4 as uuid } from "uuid";
+import PlatformManager from "../utilities/managers/PlatformManager";
 
-const profileCache = new LRUCache<string, { data: IProfile; timestamp: number }>({
+export const profileCache = new LRUCache<string, { data: IProfile; timestamp: number }>({
   max: 1000,
   ttl: 1000 * 60 * 1,
 });
@@ -18,6 +19,7 @@ const profileCache = new LRUCache<string, { data: IProfile; timestamp: number }>
 type AllowedProfileTypes =
   | "athena"
   | "common_core"
+  | "profile0"
   | "common_public"
   | "campaign"
   | "metadata"
@@ -33,7 +35,7 @@ type AllowedProfileTypes =
 
 const profileTypes = new Map<ProfileId, AllowedProfileTypes>([
   ["athena", "athena"],
-  ["profile0", "athena"],
+  ["profile0", "profile0"],
   ["common_core", "common_core"],
   ["common_public", "common_public"],
   ["campaign", "campaign"],
@@ -61,51 +63,37 @@ export async function handleProfileSelection(
   const cachedEntry = profileCache.get(cacheKey);
 
   if (cachedEntry) {
-    logger.info(`Cache hit for profileId: ${profileId} and accountId: ${accountId}`);
     return cachedEntry.data;
   }
-
-  logger.info(`Cache miss for profileId: ${profileId} and accountId: ${accountId}.`);
 
   const profile = await ProfileHelper.getProfile(accountId, profileType);
 
   if (!profile) {
-    logger.warn(`Profile not found for profileId: ${profileId} and accountId: ${accountId}`);
     return null;
   }
 
-  logger.info(`Caching profileId: ${profileId} and accountId: ${accountId}`);
   profileCache.set(cacheKey, { data: profile, timestamp: Date.now() });
 
   return profile;
 }
 
 export default async function (c: Context) {
+  const { url } = c.req;
   const accountId = c.req.param("accountId");
   const rvn = c.req.query("rvn");
   const profileId = c.req.query("profileId") as ProfileId;
   const useragent = c.req.header("User-Agent");
+
   const timestamp = new Date().toISOString();
+  if (!useragent)
+    return c.json(errors.createError(400, url, "Missing 'User-Agent'.", timestamp), 400);
 
   const uahelper = uaparser(useragent);
+  if (!uahelper)
+    return c.json(errors.createError(400, url, "Invalid 'User-Agent'.", timestamp), 400);
 
-  if (!useragent) {
-    return c.json(
-      errors.createError(400, c.req.url, "header 'User-Agent' is missing.", timestamp),
-      400,
-    );
-  }
-
-  if (!uahelper) {
-    return c.json(
-      errors.createError(400, c.req.url, "Failed to parse User-Agent.", timestamp),
-      400,
-    );
-  }
-
-  if (!accountId || !rvn || !profileId) {
-    return c.json(errors.createError(400, c.req.url, "Missing query parameters.", timestamp), 400);
-  }
+  if (!accountId || !rvn || !profileId)
+    return c.json(errors.createError(400, url, "Missing parameters.", timestamp), 400);
 
   try {
     const [user, account] = await Promise.all([
@@ -113,125 +101,193 @@ export default async function (c: Context) {
       accountService.findUserByAccountId(accountId),
     ]);
 
-    if (!user || !account) {
-      return c.json(
-        errors.createError(404, c.req.url, "Failed to find user or account.", timestamp),
-        404,
-      );
-    }
+    if (!user || !account)
+      return c.json(errors.createError(404, url, "User or account not found.", timestamp), 404);
 
     const profile = await handleProfileSelection(profileId, user.accountId);
-
-    if (!profile) {
+    if (!profile)
       return c.json(
-        errors.createError(404, c.req.url, `Profile '${profileId}' not found.`, timestamp),
+        errors.createError(404, url, `Profile '${profileId}' not found.`, timestamp),
         404,
       );
-    }
 
-    switch (profileId) {
-      case "athena":
-        profile.stats.attributes.season_num = uahelper.season;
+    const {
+      stats: { attributes },
+    } = profile;
+    let past_seasons = attributes.past_seasons || [];
+    let campaign_stats = attributes.campaign_stats || [];
 
-        const { attributes } = profile.stats;
-        let past_seasons = attributes.past_seasons || [];
+    if (profileId === "athena") {
+      attributes.season_num = uahelper.season;
 
-        let currentSeasonIndex = past_seasons.findIndex(
-          (season) => season.seasonNumber === uahelper.season,
+      const currentSeasonIndex = past_seasons.findIndex(
+        (season) => season.seasonNumber === uahelper.season,
+      );
+      if (currentSeasonIndex !== -1) {
+        const currentSeason = past_seasons[currentSeasonIndex];
+
+        const allQuests = await questsService.findAllQuestsByAccountIdAndProfile(
+          user.accountId,
+          "athena",
         );
 
-        if (currentSeasonIndex !== -1) {
-          const currentSeason = past_seasons[currentSeasonIndex];
-          const existingQuests = await questsService.findAllQuestsByAccountId(user.accountId);
-
-          const questsToRemove = existingQuests.filter(
-            (quest) => quest.season !== config.currentSeason && !quest.isDaily,
-          );
-
-          if (questsToRemove.length > 0) {
-            const idsToRemove = questsToRemove.map((quest) => quest.id);
-            await questsService.deleteQuests(idsToRemove);
+        for (const quest of allQuests) {
+          if (quest.season !== config.currentSeason && !quest.isDaily) {
+            await questsService.deleteQuestByTemplateId(
+              user.accountId,
+              uahelper.season,
+              quest.templateId,
+            );
           }
+        }
 
-          Object.assign(attributes, {
-            book_level: currentSeason.bookLevel,
-            book_xp: currentSeason.bookXp,
-            xp: currentSeason.seasonXp,
-            book_purchased: currentSeason.purchasedVIP,
-            level: currentSeason.seasonLevel,
-            season: {
-              numWins: currentSeason.numWins,
-              numLowBracket: currentSeason.numLowBracket,
-              numHighBracket: currentSeason.numHighBracket,
-            },
-          });
+        Object.assign(attributes, {
+          ...currentSeason,
+          season: {
+            numWins: currentSeason.numWins,
+            numLowBracket: currentSeason.numLowBracket,
+            numHighBracket: currentSeason.numHighBracket,
+          },
+        });
 
-          const quests = (await questsService.findAllQuests()).reduce<QuestDictionary>(
-            (acc, item) => {
-              acc[item.templateId] = {
+        profile.items = {
+          ...(
+            await questsService.findAllQuestsByAccountIdAndProfile(user.accountId, "athena")
+          ).reduce<QuestDictionary>(
+            (acc, item) => ({
+              ...acc,
+              [item.templateId]: {
                 attributes: item.entity,
                 templateId: item.templateId,
                 quantity: 1,
-              };
-              return acc;
-            },
+              },
+            }),
             {},
-          );
+          ),
+          ...profile.items,
+        };
+      } else {
+        past_seasons.push({
+          seasonNumber: uahelper.season,
+          numWins: 0,
+          numHighBracket: 0,
+          numLowBracket: 0,
+          seasonXp: 0,
+          seasonLevel: 1,
+          bookXp: 0,
+          bookLevel: 1,
+          purchasedVIP: false,
+          numRoyalRoyales: 0,
+          survivorTier: 0,
+          survivorPrestige: 0,
+        });
 
-          profile.items = { ...quests, ...profile.items };
-        } else {
-          past_seasons.push({
-            seasonNumber: uahelper.season,
-            numWins: 0,
-            numHighBracket: 0,
-            numLowBracket: 0,
-            seasonXp: 0,
-            seasonLevel: 1,
-            bookXp: 0,
-            bookLevel: 1,
-            purchasedVIP: false,
-            numRoyalRoyales: 0,
-            survivorTier: 0,
-            survivorPrestige: 0,
-          });
+        Object.assign(attributes, {
+          xp: 0,
+          level: 1,
+          book_purchased: false,
+          book_level: 1,
+          book_xp: 0,
+        });
+      }
 
-          attributes.xp = 0;
-          attributes.level = 1;
-          attributes.book_purchased = false;
-          attributes.book_level = 1;
-          attributes.book_xp = 0;
-        }
-
-        attributes.past_seasons = past_seasons;
-
-        await profilesService.update(user.accountId, "athena", profile);
-        break;
-
-      case "common_core":
-        if (!profile.stats.attributes.permissions) {
-          profile.stats.attributes.permissions = [];
-        }
-
-        for (const permission of account.permissions) {
-          if (!profile.stats.attributes.permissions.includes(permission.resource)) {
-            profile.stats.attributes.permissions.push(permission.resource);
-          }
-        }
-
-        await profilesService.update(user.accountId, "common_core", profile);
-        break;
+      attributes.past_seasons = past_seasons;
+      await profilesService.update(user.accountId, "athena", profile);
     }
 
-    const applyProfileChanges = [
-      {
-        changeType: "fullProfileUpdate",
-        profile,
-      },
-    ];
+    if (profileId === "common_core") {
+      attributes.permissions = attributes.permissions || [];
+      account.permissions.forEach((permission) => {
+        if (!attributes.permissions!.includes(permission.resource))
+          attributes.permissions!.push(permission.resource);
+      });
 
-    return c.json(MCPResponses.generate(profile, applyProfileChanges, profileId));
+      const clientPlatform = PlatformManager.getClientPlatformByUserAgent(c);
+
+      const platform = PlatformManager.getPlatform(clientPlatform as string);
+
+      profile.stats.attributes.current_mtx_platform = platform;
+      profile.items["Currency:MtxPurchased"].attributes.platform = platform;
+
+      await profilesService.update(user.accountId, "common_core", profile);
+    }
+
+    if (profileId === "campaign" && parseInt(rvn) !== -1) {
+      Object.assign(profile, {
+        updatedAt: timestamp,
+        rvn: profile.rvn + 1,
+        commandRevision: profile.commandRevision + 1,
+      });
+
+      attributes.season_num = uahelper.season;
+
+      const currentSeasonIndex = campaign_stats.findIndex(
+        (season) => season.season === uahelper.season,
+      );
+
+      if (currentSeasonIndex !== -1) {
+        const currentSeason = campaign_stats[currentSeasonIndex];
+
+        const allQuests = await questsService.findAllQuestsByAccountIdAndProfile(
+          user.accountId,
+          "campaign",
+        );
+
+        for (const quest of allQuests.filter((quest) => quest.season !== config.currentSeason)) {
+          await questsService.deleteQuestByTemplateId(
+            user.accountId,
+            uahelper.season,
+            quest.templateId,
+          );
+
+          logger.info(`Deleted quest: ${quest.templateId}`);
+        }
+
+        Object.assign(attributes, currentSeason);
+
+        const newQuestId = uuid();
+
+        const existingQuests = profile.items || {};
+
+        const questDictionary = (
+          await questsService.findAllQuestsByAccountIdAndProfile(user.accountId, "campaign")
+        ).reduce<QuestDictionary>((acc, item) => {
+          const templateId = item.templateId;
+
+          if (existingQuests[templateId]) {
+            existingQuests[templateId].attributes = {
+              ...existingQuests[templateId].attributes,
+              ...item.entity,
+            };
+          } else {
+            acc[templateId] = {
+              itemId: templateId,
+              attributes: item.entity,
+              templateId: item.templateId,
+              quantity: 1,
+            };
+          }
+
+          return acc;
+        }, existingQuests);
+
+        await profilesService.update(user.accountId, "campaign", profile);
+      } else {
+        campaign_stats.push({
+          season: uahelper.season,
+        });
+      }
+
+      attributes.campaign_stats = campaign_stats;
+
+      await profilesService.update(user.accountId, "campaign", profile);
+    }
+
+    return c.json(
+      MCPResponses.generate(profile, [{ changeType: "fullProfileUpdate", profile }], profileId),
+    );
   } catch (error) {
     logger.error(`Error in QueryProfile: ${error}`);
-    return c.json(errors.createError(500, c.req.url, "Internal server error.", timestamp), 500);
+    return c.json(errors.createError(500, url, "Internal server error.", timestamp), 500);
   }
 }

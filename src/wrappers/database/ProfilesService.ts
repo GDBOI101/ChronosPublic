@@ -3,7 +3,6 @@ import { logger } from "../..";
 import { LRUCache } from "lru-cache";
 import { Profiles } from "../../tables/profiles";
 import type Database from "../Database.wrapper";
-import asyncPool from "tiny-async-pool";
 
 function getOptimalBatchSize(
   updates: { accountId: string; type: keyof Profiles; data: Partial<unknown> }[],
@@ -17,6 +16,32 @@ function getOptimalBatchSize(
   const averageSize = estimatedSizes.reduce((sum, size) => sum + size, 0) / updates.length;
   const calculatedBatchSize = Math.floor(targetBatchSizeInBytes / averageSize);
   return Math.max(minBatchSize, Math.min(calculatedBatchSize, maxBatchSize));
+}
+
+async function asyncPool<T>(
+  poolLimit: number,
+  array: T[],
+  iteratorFn: (item: T) => Promise<void>,
+): Promise<void[]> {
+  const promises: Promise<void>[] = [];
+  const executing: Promise<void>[] = [];
+
+  for (const item of array) {
+    const p = Promise.resolve().then(() => iteratorFn(item));
+    promises.push(p);
+
+    if (poolLimit <= array.length) {
+      const e: Promise<void> = p.then(() => {
+        executing.splice(executing.indexOf(e), 1);
+      });
+      executing.push(e);
+      if (executing.length >= poolLimit) {
+        await Promise.race(executing);
+      }
+    }
+  }
+
+  return Promise.all(promises);
 }
 
 export default class ProfilesService {
@@ -198,14 +223,20 @@ export default class ProfilesService {
       }
 
       await asyncPool(concurrencyLimit, batches, async (batch) => {
+        const setClause = batch.map((update) => `"${update.type}" = data_table.data`).join(", ");
+
+        const valuesClause = batch
+          .map((_, index) => `($${index * 2 + 1}, $${index * 2 + 2}::jsonb)`)
+          .join(", ");
+
         const updateQuery = `
-          UPDATE "profiles"
-          SET "${batch[0].type}" = data_table.data
-          FROM (VALUES
-            ${batch.map((_, index) => `($${index * 2 + 1}, $${index * 2 + 2}::jsonb)`).join(",\n")}
-          ) AS data_table(account_id, data)
-          WHERE "profiles"."accountId" = data_table.account_id;
-        `;
+      UPDATE "profiles"
+      SET ${setClause}
+      FROM (
+        VALUES ${valuesClause}
+      ) AS data_table(account_id, data)
+      WHERE "profiles"."accountId" = data_table.account_id;
+    `;
 
         const parameters = batch.flatMap((update) => [
           update.accountId,
@@ -215,7 +246,10 @@ export default class ProfilesService {
         await queryRunner.query(updateQuery, parameters);
 
         batch.forEach((update) => {
-          updatedProfiles.set(update.accountId, update.data);
+          updatedProfiles.set(update.accountId, {
+            ...updatedProfiles.get(update.accountId),
+            [update.type]: update.data,
+          });
         });
       });
 
@@ -225,16 +259,12 @@ export default class ProfilesService {
         const key = this.generateCacheKey(accountId);
         const cachedProfile = this.cache.get(key);
         if (cachedProfile) {
-          const updateType = updates.find((u) => u.accountId === accountId)?.type;
+          const updatedProfile = {
+            ...cachedProfile,
+            ...data,
+          } as Profiles;
 
-          if (updateType) {
-            const updatedProfile = {
-              ...cachedProfile,
-              [updateType]: data,
-            } as Profiles;
-
-            this.cache.set(key, updatedProfile);
-          }
+          this.cache.set(key, updatedProfile);
         }
       });
     } catch (error) {

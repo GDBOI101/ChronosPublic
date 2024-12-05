@@ -2,11 +2,12 @@ import type { Context } from "hono";
 import errors from "../utilities/errors";
 import type { ProfileId } from "../utilities/responses";
 import { accountService, profilesService, userService } from "..";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import { Profiles } from "../tables/profiles";
 import MCPResponses from "../utilities/responses";
 import { handleProfileSelection } from "./QueryProfile";
 import type { FavoriteSlotName } from "../../types/profilesdefs";
+import LoadoutManager from "../utilities/managers/classes/loadouts/LoadoutManager";
 
 export default async function (c: Context) {
   const accountId = c.req.param("accountId");
@@ -102,8 +103,10 @@ export default async function (c: Context) {
       const favoriteArray = profile.stats.attributes.favorite_itemwraps;
       for (let i = 0; i < 7; i++) {
         favoriteArray![i] = itemToSlot;
-        profile.items.sandbox_loadout.attributes.locker_slots_data!.slots.ItemWrap.items[i] =
-          cosmeticTemplateId;
+        for (const loadout of profile.stats.attributes.loadouts!) {
+          profile.items[loadout].attributes.locker_slots_data!.slots.ItemWrap.items[i] =
+            cosmeticTemplateId;
+        }
       }
 
       applyProfileChanges.push({
@@ -115,8 +118,10 @@ export default async function (c: Context) {
       const favoriteSlotName = `favorite_${slotName.toLowerCase()}` as FavoriteSlotName;
 
       profile.stats.attributes[favoriteSlotName] = itemToSlot;
-      profile.items.sandbox_loadout.attributes.locker_slots_data!.slots[slotName].items =
-        cosmeticTemplateId;
+      for (const loadout of profile.stats.attributes.loadouts!) {
+        profile.items[loadout].attributes.locker_slots_data!.slots[slotName].items =
+          cosmeticTemplateId;
+      }
 
       applyProfileChanges.push({
         changeType: "statModified",

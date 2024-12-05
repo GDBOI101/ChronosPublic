@@ -1,4 +1,4 @@
-import { Repository, DataSource, type ObjectLiteral, type EntityTarget } from "typeorm";
+import { Repository, DataSource, type ObjectLiteral, type EntityTarget, BaseEntity } from "typeorm";
 import { config, logger } from "..";
 import { User } from "../tables/user";
 import { Account } from "../tables/account";
@@ -7,8 +7,35 @@ import { Profiles } from "../tables/profiles";
 import { Hype } from "../tables/hype";
 import { Friends } from "../tables/friends";
 import { Item } from "../tables/storage/item";
-
 import { Quests } from "../tables/quests";
+import { Servers } from "../tables/servers";
+import Sessions from "../tables/sessions";
+import { Receipts } from "../tables/receipts";
+import OrmLogging from "../utilities/orm/OrmLogging";
+import { SeasonStats } from "../tables/seasonstats";
+import { DisplayAssets } from "../tables/displayassets";
+import { QuestRewards } from "../tables/questrewards";
+import { LauncherUpdates } from "../tables/launcherupdates";
+import { Event } from "../tables/tournaments/event";
+import { EventWindow } from "../tables/tournaments/window";
+import { EventMetadata } from "../tables/tournaments/metadata";
+import {
+  BattleRoyaleNews,
+  CommonMessageBase,
+  DynamicBackground,
+  NewsBase,
+  NewsMessage,
+  NewsPlatformMessage,
+  PlatformMessage,
+  PlaylistDetail,
+  PlaylistInfo,
+  SaveTheWorldNews,
+  SubgameDetail,
+  SubgameInfo,
+  SubgameSelectData,
+  TournamentDetail,
+  TournamentInfo,
+} from "../tables/contentpages/ContentPage";
 
 interface DatabaseConfig {
   connectionString?: string;
@@ -27,11 +54,82 @@ export default class Database {
         type: "postgres",
         url: this.dbConfig.connectionString || config.databaseUrl,
         ssl: this.dbConfig.ssl ? { rejectUnauthorized: false } : false,
-        entities: [User, Account, Tokens, Profiles, Hype, Friends, Item, Quests],
+        entities: [
+          User,
+          Account,
+          Tokens,
+          Profiles,
+          Hype,
+          Friends,
+          Item,
+          Quests,
+          Servers,
+          Sessions,
+          Receipts,
+          SeasonStats,
+          DisplayAssets,
+          QuestRewards,
+          LauncherUpdates,
+          Event,
+          EventWindow,
+          EventMetadata,
+          BaseEntity,
+          PlaylistDetail,
+          PlaylistInfo,
+          SubgameDetail,
+          SubgameInfo,
+          SubgameSelectData,
+          CommonMessageBase,
+          SaveTheWorldNews,
+          DynamicBackground,
+          TournamentDetail,
+          TournamentInfo,
+          NewsBase,
+          BattleRoyaleNews,
+          NewsPlatformMessage,
+          PlatformMessage,
+          NewsMessage,
+        ],
         synchronize: true,
-        // logging: true,
-        // logger: new ORMLogger(),
-        migrations: [User, Account, Tokens, Profiles, Hype, Friends, Item],
+        migrations: [
+          User,
+          Account,
+          Tokens,
+          Profiles,
+          Hype,
+          Friends,
+          Item,
+          Quests,
+          Servers,
+          Sessions,
+          Receipts,
+          SeasonStats,
+          DisplayAssets,
+          QuestRewards,
+          LauncherUpdates,
+          Event,
+          EventWindow,
+          EventMetadata,
+          BaseEntity,
+          PlaylistDetail,
+          PlaylistInfo,
+          SubgameDetail,
+          SubgameInfo,
+          SubgameSelectData,
+          CommonMessageBase,
+          SaveTheWorldNews,
+          DynamicBackground,
+          TournamentDetail,
+          TournamentInfo,
+          NewsBase,
+          BattleRoyaleNews,
+          NewsPlatformMessage,
+          PlatformMessage,
+          NewsMessage,
+        ],
+        migrationsTableName: "orion_migrations",
+        logging: true,
+        logger: new OrmLogging(),
       });
 
       await this.connection.initialize();

@@ -1,4 +1,4 @@
-import { BaseEntity, Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { BaseEntity, Column, Entity, PrimaryGeneratedColumn, Unique } from "typeorm";
 
 export enum TokenTypes {
   AccessToken = "accesstoken",
@@ -7,6 +7,7 @@ export enum TokenTypes {
 }
 
 @Entity()
+@Unique(["accountId", "type"])
 export class Tokens extends BaseEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;

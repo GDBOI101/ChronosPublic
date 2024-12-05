@@ -1,11 +1,11 @@
 import type { ServerWebSocket } from "bun";
 import xmlbuilder from "xmlbuilder";
-import type { ChronosSocket } from "../client";
+import type { LyntSocket } from "../client";
 import { XmppService } from "../saved/XmppServices";
 import { friendsService } from "../../..";
 
 export async function updatePresenceForFriend(
-  socket: ServerWebSocket<ChronosSocket>,
+  socket: ServerWebSocket<LyntSocket>,
   status: string,
   offline: boolean,
   away: boolean,

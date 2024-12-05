@@ -1,10 +1,10 @@
 import type { ServerWebSocket } from "bun";
-import type { ChronosSocket } from "../server";
+import type { LyntSocket } from "../server";
 import xmlparser from "xml-parser";
 import xmlbuilder from "xmlbuilder";
 import { v4 as uuid } from "uuid";
 
-export default async function (socket: ServerWebSocket<ChronosSocket>, root: xmlparser.Node) {
+export default async function (socket: ServerWebSocket<LyntSocket>, root: xmlparser.Node) {
   socket.send(
     xmlbuilder
       .create("open")

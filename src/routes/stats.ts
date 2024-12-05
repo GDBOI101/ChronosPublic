@@ -1,7 +1,6 @@
-import { accountService, app, friendsService, logger, userService } from "..";
+import { accountService, app, friendsService, logger, seasonStatsService, userService } from "..";
 import { Validation } from "../middleware/validation";
 import errors from "../utilities/errors";
-import type { Stats } from "../tables/account";
 
 const controller = app.basePath("/fortnite/api");
 const proxy = app.basePath("/statsproxy/api");
@@ -40,10 +39,10 @@ export default function () {
       };
 
       const specificPlaylist = playlists[playlist];
-      const stats = account.stats[specificPlaylist];
+      const stat = await seasonStatsService.findStatByAccountId(user.accountId, specificPlaylist);
 
-      if (!stats)
-        return c.json(errors.createError(404, c.req.url, "Stat not found..", timestamp), 404);
+      if (!stat)
+        return c.json(errors.createError(404, c.req.url, "Stat not found.", timestamp), 404);
 
       const friends = await friendsService.findFriendByAccountId(user.accountId);
 
@@ -109,12 +108,12 @@ export default function () {
         };
 
         const specificPlaylist = playlists[leaderboardName];
-        const stats = account.stats[specificPlaylist];
+        const stat = await seasonStatsService.findStatByAccountId(user.accountId, specificPlaylist);
 
-        if (!stats)
+        if (!stat)
           return c.json(errors.createError(404, c.req.url, "Stat not found.", timestamp), 404);
 
-        const topAccounts = await accountService.findTopAccounts(specificPlaylist, 1000);
+        const topAccounts = await seasonStatsService.findTopAccounts(specificPlaylist, 1000);
 
         if (topAccounts.length === 0) {
           return c.json({
@@ -124,7 +123,7 @@ export default function () {
         }
 
         for (const topAccount of topAccounts) {
-          const topAccountStats = topAccount.stats[specificPlaylist];
+          const topAccountStats = topAccount[specificPlaylist];
 
           if (!topAccountStats)
             return c.json(errors.createError(404, c.req.url, "Stat not found.", timestamp), 404);
@@ -165,7 +164,7 @@ export default function () {
       const permissions = c.get("permission");
       const timestamp = new Date().toISOString();
 
-      const hasPermission = permissions.hasPermission("fortnite:stats", "READ");
+      const hasPermission = await permissions.hasPermission("fortnite:stats", "READ");
 
       if (!hasPermission)
         return c.json(
@@ -201,31 +200,35 @@ export default function () {
         const startTime = startOfDay.getTime();
         const endTime = endOfWeek.getTime();
 
+        const userStats = await seasonStatsService.findByAccountId(user.accountId);
+
+        if (!userStats)
+          return c.json(errors.createError(404, c.req.url, "User not found.", timestamp), 404);
+
         return c.json({
           startTime,
           endTime,
           stats: {
-            br_score_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].wins,
-            br_score_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].wins,
-            br_score_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].wins,
-            br_kills_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].kills,
-            br_kills_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].kills,
-            br_kills_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].kills,
+            br_score_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].wins,
+            br_score_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].wins,
+            br_score_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].wins,
+            br_kills_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].kills,
+            br_kills_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].kills,
+            br_kills_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].kills,
             br_matchesplayed_keyboardmouse_m0_playlist_defaultsolo:
-              account.stats["solos"].matchesplayed,
-            br_matchesplayed_keyboardmouse_m0_playlist_defaultduo:
-              account.stats["duos"].matchesplayed,
+              userStats["solos"].matchesplayed,
+            br_matchesplayed_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].matchesplayed,
             br_matchesplayed_keyboardmouse_m0_playlist_defaultsquad:
-              account.stats["squads"].matchesplayed,
-            br_placetop25_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].top25,
-            br_placetop25_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].top25,
-            br_placetop25_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].top25,
-            br_placetop10_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].top10,
-            br_placetop10_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].top10,
-            br_placetop10_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].top10,
-            br_placetop1_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].top1,
-            br_placetop1_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].top1,
-            br_placetop1_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].top1,
+              userStats["squads"].matchesplayed,
+            br_placetop25_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].top25,
+            br_placetop25_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].top25,
+            br_placetop25_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].top25,
+            br_placetop10_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].top10,
+            br_placetop10_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].top10,
+            br_placetop10_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].top10,
+            br_placetop1_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].top1,
+            br_placetop1_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].top1,
+            br_placetop1_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].top1,
           },
           accountId: user.accountId,
         });
@@ -244,7 +247,7 @@ export default function () {
       const permissions = c.get("permission");
       const timestamp = new Date().toISOString();
 
-      const hasPermission = permissions.hasPermission("fortnite:stats", "READ");
+      const hasPermission = await permissions.hasPermission("fortnite:stats", "READ");
 
       if (!hasPermission)
         return c.json(
@@ -280,31 +283,35 @@ export default function () {
         const startTime = startOfDay.getTime();
         const endTime = endOfWeek.getTime();
 
+        const userStats = await seasonStatsService.findByAccountId(user.accountId);
+
+        if (!userStats)
+          return c.json(errors.createError(404, c.req.url, "User not found.", timestamp), 404);
+
         return c.json({
           startTime,
           endTime,
           stats: {
-            br_score_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].wins,
-            br_score_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].wins,
-            br_score_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].wins,
-            br_kills_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].kills,
-            br_kills_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].kills,
-            br_kills_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].kills,
+            br_score_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].wins,
+            br_score_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].wins,
+            br_score_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].wins,
+            br_kills_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].kills,
+            br_kills_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].kills,
+            br_kills_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].kills,
             br_matchesplayed_keyboardmouse_m0_playlist_defaultsolo:
-              account.stats["solos"].matchesplayed,
-            br_matchesplayed_keyboardmouse_m0_playlist_defaultduo:
-              account.stats["duos"].matchesplayed,
+              userStats["solos"].matchesplayed,
+            br_matchesplayed_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].matchesplayed,
             br_matchesplayed_keyboardmouse_m0_playlist_defaultsquad:
-              account.stats["squads"].matchesplayed,
-            br_placetop25_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].top25,
-            br_placetop25_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].top25,
-            br_placetop25_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].top25,
-            br_placetop10_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].top10,
-            br_placetop10_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].top10,
-            br_placetop10_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].top10,
-            br_placetop1_keyboardmouse_m0_playlist_defaultsolo: account.stats["solos"].top1,
-            br_placetop1_keyboardmouse_m0_playlist_defaultduo: account.stats["duos"].top1,
-            br_placetop1_keyboardmouse_m0_playlist_defaultsquad: account.stats["squads"].top1,
+              userStats["squads"].matchesplayed,
+            br_placetop25_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].top25,
+            br_placetop25_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].top25,
+            br_placetop25_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].top25,
+            br_placetop10_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].top10,
+            br_placetop10_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].top10,
+            br_placetop10_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].top10,
+            br_placetop1_keyboardmouse_m0_playlist_defaultsolo: userStats["solos"].top1,
+            br_placetop1_keyboardmouse_m0_playlist_defaultduo: userStats["duos"].top1,
+            br_placetop1_keyboardmouse_m0_playlist_defaultsquad: userStats["squads"].top1,
           },
           accountId: user.accountId,
         });
@@ -319,7 +326,7 @@ export default function () {
     const permissions = c.get("permission");
     const timestamp = new Date().toISOString();
 
-    const hasPermission = permissions.hasPermission("fortnite:stats", "READ");
+    const hasPermission = await permissions.hasPermission("fortnite:stats", "READ");
 
     if (!hasPermission)
       return c.json(
@@ -340,4 +347,117 @@ export default function () {
 
     return c.json({});
   });
+
+  controller.get(
+    "/stats/accountId/:accountId/bulk/window/alltime",
+    Validation.verifyPermissions,
+    Validation.verifyToken,
+    async (c) => {
+      const permissions = c.get("permission");
+      const timestamp = new Date().toISOString();
+
+      const hasPermission = await permissions.hasPermission("fortnite:stats", "READ");
+
+      if (!hasPermission)
+        return c.json(
+          errors.createError(
+            401,
+            c.req.url,
+            permissions.errorReturn("fortnite:stats", "READ"),
+            timestamp,
+          ),
+          401,
+        );
+
+      const accountId = c.req.param("accountId");
+
+      const user = await userService.findUserByAccountId(accountId);
+      const account = await accountService.findUserByAccountId(accountId);
+
+      if (!user || !account)
+        return c.json(errors.createError(404, c.req.url, "User not found.", timestamp), 404);
+
+      // update this to use findStatByAccountId
+
+      const userStats = await seasonStatsService.findByAccountId(user.accountId);
+
+      if (!userStats)
+        return c.json(errors.createError(404, c.req.url, "User not found.", timestamp), 404);
+
+      return c.json([
+        {
+          name: "br_placetop6_pc_m0_p9",
+          value: userStats.squads.top6,
+        },
+        {
+          name: "br_placetop3_pc_m0_p9",
+          value: userStats.squads.top3,
+        },
+        {
+          name: "br_matchesplayed_pc_m0_p9",
+          value: userStats.squads.matchesplayed,
+        },
+        {
+          name: "br_placetop1_pc_m0_p9",
+          value: userStats.squads.wins,
+        },
+        {
+          name: "br_kills_pc_m0_p9",
+          value: userStats.squads.kills,
+        },
+        {
+          name: "br_minutesplayed_pc_m0_p9",
+          value: 0,
+        },
+        {
+          name: "br_placetop12_pc_m0_p10",
+          value: userStats.duos.top12,
+        },
+        {
+          name: "br_placetop5_pc_m0_p10",
+          value: userStats.duos.top5,
+        },
+        {
+          name: "br_matchesplayed_pc_m0_p10",
+          value: userStats.duos.matchesplayed,
+        },
+        {
+          name: "br_placetop1_pc_m0_p10",
+          value: userStats.duos.wins,
+        },
+        {
+          name: "br_kills_pc_m0_p10",
+          value: userStats.duos.kills,
+        },
+        {
+          name: "br_minutesplayed_pc_m0_p10",
+          value: 0,
+        },
+        {
+          name: "br_placetop25_pc_m0_p2",
+          value: userStats.solos.top25,
+        },
+        {
+          name: "br_placetop10_pc_m0_p2",
+          value: userStats.solos.top10,
+        },
+        {
+          name: "br_placetop1_pc_m0_p2",
+          value: userStats.solos.wins,
+        },
+        {
+          name: "br_kills_pc_m0_p2",
+          value: userStats.solos.kills,
+        },
+        {
+          name: "br_matchesplayed_pc_m0_p2",
+          value: userStats.solos.matchesplayed,
+        },
+        {
+          name: "br_minutesplayed_pc_m0_p2",
+          value: 0,
+        },
+      ]);
+    },
+  );
 }

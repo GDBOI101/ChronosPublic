@@ -113,11 +113,13 @@ export default async function (c: Context) {
       ItemWrap: () => {
         const favoriteArray = profile.stats.attributes.favorite_itemwraps!;
         favoriteArray.fill(itemToSlot, 0, ITEM_WRAP_COUNT);
-        profile.items.sandbox_loadout.attributes.locker_slots_data!.slots.ItemWrap.items.fill(
-          cosmeticTemplateId,
-          0,
-          ITEM_WRAP_COUNT,
-        );
+        for (const loadout of profile.stats.attributes.loadouts!) {
+          profile.items[loadout].attributes.locker_slots_data!.slots.ItemWrap.items.fill(
+            cosmeticTemplateId,
+            0,
+            ITEM_WRAP_COUNT,
+          );
+        }
 
         applyProfileChanges.push({
           changeType: "statModified",
@@ -127,8 +129,11 @@ export default async function (c: Context) {
       },
       default: () => {
         profile.stats.attributes[favoriteSlotName] = itemToSlot;
-        profile.items.sandbox_loadout.attributes.locker_slots_data!.slots[slotName].items =
-          cosmeticTemplateId;
+        for (const loadout of profile.stats.attributes.loadouts!) {
+          profile.items[loadout].attributes.locker_slots_data!.slots[slotName].items =
+            cosmeticTemplateId;
+        }
+
         applyProfileChanges.push({
           changeType: "statModified",
           name: favoriteSlotName,

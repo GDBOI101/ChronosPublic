@@ -1,31 +1,19 @@
 import { itemStorageService, logger } from "../..";
-import { ShopHelper } from "../helpers/shophelper";
-import { ShopGenerator } from "../shop";
 import cron from "node-cron";
+import { ShopGenerator } from "../shop";
+import { ShopHelper } from "../helpers/shophelper";
 
-export default async function rotate() {
-  logger.info("Waiting for storefront generation.");
+logger.startup("Starting AutoRotate");
 
-  cron.schedule(
-    "0 17 * * *",
-    async () => {
-      await ShopGenerator.generate();
-      const nextRun = new Date();
-      nextRun.setHours(17, 0, 0, 0);
-      nextRun.setDate(nextRun.getDate() + 1);
+cron.schedule("0 0 * * *", async () => {
+  logger.info("Rotating Shop");
 
-      logger.info(`Next shop generates at ${nextRun}`);
-      logger.info("Successfully generated storefront.");
+  await ShopGenerator.generate();
 
-      await itemStorageService.addItems([
-        {
-          data: ShopHelper.getCurrentShop(),
-          type: "storefront",
-        },
-      ]);
-    },
-    {
-      timezone: "America/Phoenix",
-    },
-  );
-}
+  const shopData = ShopHelper.getCurrentShop();
+  const addedItems = await itemStorageService.addItems([{ data: shopData, type: "storefront" }]);
+
+  if (!addedItems) return false;
+
+  logger.info("Shop Rotation Complete");
+});

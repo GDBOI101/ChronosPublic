@@ -1,8 +1,16 @@
 import { config, logger } from "../..";
+import { handleProfileSelection } from "../../operations/QueryProfile";
+import { ItemGrantingHandler } from "../granting/ItemGrantingHandler";
+import { BattlepassQuestGranter } from "../quests/BattlepassQuestGranter";
 import { BattlepassManager } from "./BattlepassManager";
 import { LevelsManager, type PastSeasons } from "./LevelsManager";
 
-type Types = "athena" | "common_core" | "athenaseasonxpboost" | "athenaseasonfriendxpboost";
+type Types =
+  | "athena"
+  | "common_core"
+  | "athenaseasonxpboost"
+  | "athenaseasonfriendxpboost"
+  | "challengebundleschedule";
 
 interface ItemOut {
   templateId: string;
@@ -21,173 +29,140 @@ interface Attributes {
 }
 
 export namespace RewardsManager {
-  export async function addGrant(pastSeasons: PastSeasons) {
-    let originalBookLevel = pastSeasons.bookLevel;
+  export async function addGrant(pastSeason: PastSeasons, accountId: string, username: string) {
+    let originalBookLevel = pastSeason.bookLevel;
 
-    const updater = await LevelsManager.update(pastSeasons, config.currentSeason);
+    const updater = await LevelsManager.update(pastSeason, config.currentSeason);
 
     if (!updater) return;
 
-    pastSeasons = updater.pastSeasons;
+    pastSeason = updater.pastSeasons;
+
+    const items: ItemOut[] = [];
 
     const freeTier = await BattlepassManager.GetSeasonFreeRewards();
     const paidTier = await BattlepassManager.GetSeasonPaidRewards();
 
-    const items: ItemOut[] = [];
+    const athena = await handleProfileSelection("athena", accountId);
+    const common_core = await handleProfileSelection("common_core", accountId);
+
+    if (!athena || !common_core) return;
 
     if (!freeTier || !paidTier) return;
 
-    for (let i = originalBookLevel; i < pastSeasons.bookLevel; i++) {
-      const paidTierRewards = paidTier.filter((tier) => tier.Tier === i);
-      const freeTierRewards = freeTier.filter((tier) => tier.Tier === i);
+    for (let i = originalBookLevel; i < pastSeason.bookLevel; i++) {
+      const paidTierRewards = paidTier.filter((tier) => tier.Tier === i + 1);
+      const freeTierRewards = freeTier.filter((tier) => tier.Tier === i + 1);
 
-      if (!paidTierRewards) continue;
-      if (!freeTierRewards) continue;
+      const currency = common_core.items["Currency:MtxPurchased"];
 
-      for (const tier of freeTierRewards) {
-        if (!updater.canGrantItems) break;
-        if (tier.Tier <= originalBookLevel) break;
-        if (tier.Tier > pastSeasons.bookLevel) break;
+      if (paidTierRewards.length === 0 && freeTierRewards.length === 0) continue;
 
-        const { TemplateId: item, Quantity: quantity } = tier;
-        const lowercaseItem = item.toLowerCase();
-
-        const attributes = {
-          max_level_bonus: 0,
-          level: 1,
-          item_seen: false,
-          xp: 0,
-          variants: [],
-          favorite: false,
-        };
-
+      for (const rewards of freeTierRewards || paidTierRewards) {
         switch (true) {
-          case lowercaseItem.startsWith("homebasebanner"):
-          case lowercaseItem.startsWith("bannertoken"):
-            items.push({
-              templateId: item,
-              type: "common_core",
-              attributes,
-              quantity,
-            });
-            break;
+          case rewards.TemplateId.startsWith("BannerToken"):
+          case rewards.TemplateId.startsWith("HomebaseBanner:"):
+          case rewards.TemplateId.startsWith("HomebaseBannerIcon:"):
+            ItemGrantingHandler.addBannerOrHomebaseItem(rewards.TemplateId, common_core);
 
-          case lowercaseItem.startsWith("athena"):
             items.push({
-              templateId: item,
-              type: "athena",
-              attributes,
-              quantity,
-            });
-            break;
-          case lowercaseItem.startsWith("token:athenaseasonxpboost"):
-            items.push({
-              templateId: item,
-              type: "athenaseasonxpboost",
-              attributes,
-              quantity,
-            });
-            break;
-          case lowercaseItem.startsWith("token:athenaseasonfriendxpboost"):
-            items.push({
-              templateId: item,
-              type: "athenaseasonfriendxpboost",
-              attributes,
-              quantity,
-            });
-            break;
-          case lowercaseItem.startsWith("currency:mtxgiveaway"):
-            items.push({
-              templateId: "Currency:MtxPurchased",
+              templateId: rewards.TemplateId,
               type: "common_core",
-              attributes,
-              quantity: quantity,
+              attributes: {
+                max_level_bonus: 0,
+                level: 1,
+                item_seen: false,
+                xp: 0,
+                variants: [],
+                favorite: false,
+              },
+              quantity: rewards.Quantity,
+            });
+            break;
+          case rewards.TemplateId.startsWith("Athena"):
+            ItemGrantingHandler.handleAthenaItem(rewards.TemplateId, rewards.Quantity, athena);
+
+            items.push({
+              templateId: rewards.TemplateId,
+              type: "athena",
+              attributes: {
+                max_level_bonus: 0,
+                level: 1,
+                item_seen: false,
+                xp: 0,
+                variants: [],
+                favorite: false,
+              },
+              quantity: rewards.Quantity,
+            });
+            break;
+          case rewards.TemplateId.startsWith("Token:"):
+            if (rewards.TemplateId.includes("athenaseasonxpboost")) {
+              ItemGrantingHandler.handleBoostType("season_match_boost", rewards.Quantity, athena);
+
+              items.push({
+                templateId: rewards.TemplateId,
+                type: "athenaseasonxpboost",
+                attributes: {
+                  max_level_bonus: 0,
+                  level: 1,
+                  item_seen: false,
+                  xp: 0,
+                  variants: [],
+                  favorite: false,
+                },
+                quantity: rewards.Quantity,
+              });
+            } else if (rewards.TemplateId.includes("athenaseasonfriendxpboost")) {
+              ItemGrantingHandler.handleBoostType(
+                "season_friend_match_boost",
+                rewards.Quantity,
+                athena,
+              );
+
+              items.push({
+                templateId: rewards.TemplateId,
+                type: "athenaseasonfriendxpboost",
+                attributes: {
+                  max_level_bonus: 0,
+                  level: 1,
+                  item_seen: false,
+                  xp: 0,
+                  variants: [],
+                  favorite: false,
+                },
+                quantity: rewards.Quantity,
+              });
+            }
+            break;
+          case rewards.TemplateId.startsWith("Currency:"):
+            currency.quantity += rewards.Quantity;
+            break;
+          case rewards.TemplateId.startsWith("ChallengeBundleSchedule:"):
+            const granter = await BattlepassQuestGranter.grant(
+              accountId,
+              username,
+              rewards.TemplateId,
+            );
+
+            if (!granter || !granter.multiUpdates) continue;
+
+            items.push({
+              templateId: rewards.TemplateId,
+              type: "challengebundleschedule",
+              attributes: granter.multiUpdates[0].item,
+              quantity: 1,
             });
             break;
 
           default:
-            logger.warn(`Missing Reward: ${item}`);
-        }
-      }
-
-      for (const tier of paidTier) {
-        if (!updater.canGrantItems) break;
-        if (!pastSeasons.purchasedVIP) break;
-        if (tier.Tier <= originalBookLevel) break;
-        if (tier.Tier > pastSeasons.bookLevel) break;
-
-        const { TemplateId: item, Quantity: quantity } = tier;
-        const lowercaseItem = item.toLowerCase();
-
-        const attributes = {
-          max_level_bonus: 0,
-          level: 1,
-          item_seen: false,
-          xp: 0,
-          variants: [],
-          favorite: false,
-        };
-
-        switch (true) {
-          case lowercaseItem.startsWith("homebasebanner"):
-          case lowercaseItem.startsWith("bannertoken"):
-            items.push({
-              templateId: item,
-              type: "common_core",
-              attributes,
-              quantity,
-            });
-            break;
-
-          case lowercaseItem.startsWith("athena"):
-            items.push({
-              templateId: item,
-              type: "athena",
-              attributes,
-              quantity,
-            });
-            break;
-          case lowercaseItem.startsWith("token:athenaseasonxpboost"):
-            items.push({
-              templateId: item,
-              type: "athenaseasonxpboost",
-              attributes,
-              quantity,
-            });
-            break;
-          case lowercaseItem.startsWith("token:athenaseasonfriendxpboost"):
-            items.push({
-              templateId: item,
-              type: "athenaseasonfriendxpboost",
-              attributes,
-              quantity,
-            });
-            break;
-          case lowercaseItem.startsWith("currency:mtxgiveaway"):
-            items.push({
-              templateId: "Currency:MtxPurchased",
-              type: "common_core",
-              attributes,
-              quantity: quantity,
-            });
-            break;
-          case lowercaseItem.startsWith("cosmeticvarianttoken"):
-            items.push({
-              templateId: item,
-              type: "athena",
-              attributes,
-              quantity,
-            });
-            break;
-
-          default:
-            logger.warn(`Missing Reward: ${item}`);
+            logger.warn(`Missing reward: ${rewards.TemplateId} at tier ${rewards.Tier}`);
         }
       }
     }
 
     return {
-      pastSeasons,
+      pastSeasons: pastSeason,
       items,
       canGrantItems: updater.canGrantItems,
     };

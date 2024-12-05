@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import errors from "../utilities/errors";
 import uaparser from "../utilities/uaparser";
 import type { ProfileId } from "../utilities/responses";

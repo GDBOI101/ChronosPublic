@@ -57,7 +57,7 @@ export default function () {
       {
         serviceInstanceId: "fortnite",
         status: Status.UP,
-        message: "Chronos Servers are UP!",
+        message: "Lynt Servers are UP!",
         maintenanceUri: null,
         overrideCatalogIds: ["a7f138b2e51945ffbfdacc1af0541053"],
         allowedActions: [UserAction.PLAY, UserAction.DOWNLOAD],

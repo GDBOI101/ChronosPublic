@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { accountService, logger, profilesService, userService } from "..";
 import errors from "../utilities/errors";
 import type { ProfileId } from "../utilities/responses";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import MCPResponses from "../utilities/responses";
 import { handleProfileSelection } from "./QueryProfile";
 

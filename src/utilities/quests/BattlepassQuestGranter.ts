@@ -1,4 +1,6 @@
 import { config, logger, questsService } from "../..";
+import type { ItemValue } from "../../../types/profilesdefs";
+import { handleProfileSelection } from "../../operations/QueryProfile";
 import type { PastSeasons } from "../managers/LevelsManager";
 import { QuestManager, type Objectives } from "../managers/QuestManager";
 import RefreshAccount from "../refresh";
@@ -19,178 +21,173 @@ export namespace BattlepassQuestGranter {
       return { multiUpdates: [] };
     }
 
+    const profile = await handleProfileSelection("common_core", accountId);
+
+    if (!profile) {
+      return { multiUpdates: [] };
+    }
+
     const updates: Array<{
       changeType: "itemAdded" | "itemRemoved";
       itemId: string;
       item?: any;
     }> = [];
 
-    const listOfBundles: Record<string, string[]> = {};
+    const newChallengeBundles = [];
+    const newQuests: {
+      accountId: string;
+      profileId: string;
+      templateId: string;
+      entity: object;
+      isDaily: boolean;
+      season: number;
+    }[] = [];
+    const profileItemsToUpdate: {
+      [key: string]: {
+        templateId: string;
+        attributes: Partial<ItemValue>;
+        quantity: number;
+      };
+    } = {};
 
     for (const questData of filteredMatchingQuest) {
-      const bundleId = `ChallengeBundle:${questData.Name}`;
-      if (!listOfBundles[questData.ChallengeBundleSchedule]) {
-        listOfBundles[questData.ChallengeBundleSchedule] = [];
-      }
+      const bundleScheduleId = questData.ChallengeBundleSchedule;
+      const bundleId = questData.Name;
+      const grantedBundleNames = questData.Objects.map((object) => object.Name);
 
-      listOfBundles[questData.ChallengeBundleSchedule].push(bundleId);
-
-      const listOfQuests: string[] = [];
-      let currentXP = 0;
-
-      for (const quest of questData.Objects) {
-        if (quest.Options.hasExtra) continue;
-
-        listOfQuests.push(quest.Name);
-
-        try {
-          const storage = await questsService.findQuestByTemplateId(
-            accountId,
-            config.currentSeason,
-            quest.Name,
-          );
-
-          if (!storage) {
-            const ObjectiveState: Objectives[] = quest.Objectives.map((objective) => {
-              const isXPObjective =
-                objective.BackendName.toLowerCase().includes("athena_season_xp_gained");
-              const value = isXPObjective ? Math.min(currentXP, objective.Count) : 0;
-
-              return {
-                BackendName: `completion_${objective.BackendName}`,
-                Stage: value,
-                Count: objective.Count,
-              };
-            });
-
-            await questsService.addQuest({
-              templateId: quest.Name,
-              accountId,
-              entity: {
-                creation_time: new Date().toISOString(),
-                level: -1,
-                item_seen: false,
-                playlists: [],
-                sent_new_notification: true,
-                challenge_bundle_id: bundleId,
-                xp_reward_scalar: 1,
-                challenge_linked_quest_given: "",
-                quest_pool: "",
-                quest_state: "Active",
-                bucket: "",
-                last_state_change_time: new Date().toISOString(),
-                challenge_linked_quest_parent: "",
-                max_level_bonus: 0,
-                xp: 0,
-                quest_rarity: "uncommon",
-                favorite: false,
-              },
-              isDaily: false,
-              season: config.currentSeason,
-              profileId: "athena",
-            });
-
-            const newQuestItem = {
-              templateId: quest.Name,
-              attributes: {
-                creation_time: new Date().toISOString(),
-                level: -1,
-                item_seen: false,
-                playlists: [],
-                sent_new_notification: true,
-                challenge_bundle_id: bundleId,
-                xp_reward_scalar: 1,
-                challenge_linked_quest_given: "",
-                quest_pool: "",
-                quest_state: "Active",
-                bucket: "",
-                last_state_change_time: new Date().toISOString(),
-                challenge_linked_quest_parent: "",
-                max_level_bonus: 0,
-                xp: 0,
-                quest_rarity: "uncommon",
-                favorite: false,
-              },
-              quantity: 1,
-            };
-
-            for (const obj of ObjectiveState) {
-              // @ts-ignore
-              newQuestItem.attributes[obj.BackendName] = obj.Stage;
-            }
-
-            updates.push({
-              changeType: "itemAdded",
-              itemId: quest.Name,
-              item: newQuestItem,
-            });
-
-            await RefreshAccount(accountId, username);
-          }
-        } catch (error) {
-          logger.error(`Error generating quest: ${error}`);
-        }
-      }
-
-      let updatedSchedule = questData.ChallengeBundleSchedule;
-      if (!updatedSchedule.startsWith("ChallengeBundleSchedule:")) {
-        updatedSchedule = `ChallengeBundleSchedule:${updatedSchedule}`;
-      }
+      const bundleScheduleAttributes = {
+        unlock_epoch: new Date().toISOString(),
+        max_level_bonus: 0,
+        level: 1,
+        item_seen: true,
+        xp: 0,
+        favorite: false,
+        granted_bundles: grantedBundleNames,
+      };
 
       const bundleAttributes = {
         has_unlock_by_completion: false,
         num_quests_completed: 0,
         level: 0,
-        grantedquestinstanceids: listOfQuests,
+        grantedquestinstanceids: grantedBundleNames,
         item_seen: true,
         max_allowed_bundle_level: 0,
-        num_granted_bundle_quests: listOfQuests.length,
+        num_granted_bundle_quests: grantedBundleNames.length,
         max_level_bonus: 0,
-        challenge_bundle_schedule_id: updatedSchedule,
+        challenge_bundle_schedule_id: bundleScheduleId,
         num_progress_quests_completed: 0,
         xp: 0,
         favorite: false,
       };
 
-      updates.push({
-        changeType: "itemRemoved",
-        itemId: bundleId,
+      const processQuestsPromises = questData.Objects.map(async (object) => {
+        const questTemplateId = object.Name;
+
+        const existingQuest = await questsService.findQuestByTemplateId(
+          accountId,
+          config.currentSeason,
+          questTemplateId,
+        );
+
+        if (!existingQuest) {
+          const objectiveProgress = object.Objectives.reduce(
+            (progress: { [key: string]: number }, { BackendName }) => {
+              progress[`completion_${BackendName}`] = 0;
+              return progress;
+            },
+            {},
+          );
+
+          const newQuestData = {
+            accountId: accountId,
+            profileId: "athena",
+            templateId: questTemplateId,
+            isDaily: false,
+            entity: {
+              creation_time: new Date().toISOString(),
+              level: 1,
+              item_seen: true,
+              sent_new_notification: true,
+              challenge_bundle_id: bundleId,
+              xp_reward_scalar: 1,
+              quest_state: "Active",
+              last_state_change_time: new Date().toISOString(),
+              max_level_bonus: 0,
+              xp: 0,
+              favorite: false,
+              ...objectiveProgress,
+            },
+            season: config.currentSeason,
+          };
+
+          newQuests.push(newQuestData);
+
+          profileItemsToUpdate[questTemplateId] = {
+            templateId: questTemplateId,
+            attributes: newQuestData.entity,
+            quantity: 1,
+          };
+
+          updates.push({
+            changeType: "itemAdded",
+            itemId: questTemplateId,
+            item: profileItemsToUpdate[questTemplateId],
+          });
+        }
       });
 
-      updates.push({
-        changeType: "itemAdded",
-        itemId: bundleId,
-        item: bundleAttributes,
-      });
-    }
+      await Promise.all(processQuestsPromises);
 
-    for (const key in listOfBundles) {
-      const bundle = listOfBundles[key];
+      if (bundleId) {
+        const existingBundle = await questsService.findQuestByTemplateId(
+          accountId,
+          config.currentSeason,
+          bundleId,
+        );
 
-      const newQuestItem = {
-        templateId: key,
-        attributes: {
-          unlock_epoch: new Date().toISOString(),
-          max_level_bonus: 0,
-          level: 0,
-          item_seen: true,
-          xp: 0,
-          favorite: false,
-          granted_bundles: bundle,
-        },
-        quantity: 1,
-      };
+        if (!existingBundle) {
+          newChallengeBundles.push(
+            {
+              accountId: accountId,
+              profileId: "athena",
+              templateId: `ChallengeBundle:${bundleId}`,
+              entity: bundleAttributes,
+              isDaily: false,
+              season: config.currentSeason,
+            },
+            {
+              accountId: accountId,
+              profileId: "athena",
+              templateId: bundleScheduleId,
+              entity: bundleScheduleAttributes,
+              isDaily: false,
+              season: config.currentSeason,
+            },
+          );
 
-      updates.push({
-        changeType: "itemRemoved",
-        itemId: key,
-      });
+          profileItemsToUpdate[`ChallengeBundle:${bundleId}`] = {
+            templateId: `ChallengeBundle:${bundleId}`,
+            attributes: bundleAttributes,
+            quantity: 1,
+          };
 
-      updates.push({
-        changeType: "itemAdded",
-        itemId: key,
-        item: newQuestItem,
-      });
+          profileItemsToUpdate[bundleScheduleId] = {
+            templateId: bundleScheduleId,
+            attributes: bundleScheduleAttributes,
+            quantity: 1,
+          };
+        }
+      }
+
+      if (newQuests.length > 0) {
+        await questsService.addQuests(newQuests);
+      }
+
+      if (newChallengeBundles.length > 0) {
+        await questsService.addQuests(newChallengeBundles);
+      }
+
+      profile.items = { ...profile.items, ...profileItemsToUpdate };
     }
 
     try {

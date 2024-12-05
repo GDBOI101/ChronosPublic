@@ -1,10 +1,11 @@
 import type { Context } from "hono";
 import type { ProfileId } from "../utilities/responses";
 import errors from "../utilities/errors";
-import { accountService, userService } from "..";
-import ProfileHelper from "../utilities/profiles";
+import { accountService, app, logger, profilesService, userService } from "..";
 import MCPResponses from "../utilities/responses";
+import { v4 as uuid } from "uuid";
 import { handleProfileSelection } from "./QueryProfile";
+import { SendMessageToId } from "../sockets/xmpp/utilities/SendMessageToId";
 
 export default async function (c: Context) {
   const accountId = c.req.param("accountId");
@@ -43,6 +44,14 @@ export default async function (c: Context) {
       404,
     );
 
+  const athena = await handleProfileSelection("athena", user.accountId);
+
+  if (!athena)
+    return c.json(
+      errors.createError(404, c.req.url, `Profile 'athena' not found.`, timestamp),
+      404,
+    );
+
   let body;
   try {
     body = await c.req.json();
@@ -50,7 +59,103 @@ export default async function (c: Context) {
     return c.json({ error: "Body isn't valid JSON" }, 400);
   }
 
-  const { bClaimForStw } = body;
+  const applyProfileChanges: object[] = [];
+  let shouldUpdateProfile = false;
 
-  return c.json(MCPResponses.generate(profile, [], profileId));
+  logger.debug(
+    `MfaEnabled: ${profile.stats.attributes.mfa_enabled} MfaRewardClaimed: ${athena.stats.attributes.mfa_reward_claimed}`,
+  );
+
+  if (!profile.stats.attributes.mfa_enabled && !athena.stats.attributes.mfa_reward_claimed) {
+    profile.stats.attributes.mfa_enabled = true;
+
+    const reward = "AthenaDance:EID_BoogieDown";
+
+    if (!athena.items[reward]) {
+      const item = {
+        templateId: reward,
+        attributes: {
+          level: 1,
+          item_seen: false,
+          max_level_bonus: 0,
+          rnd_sel_cnt: 0,
+          xp: 0,
+        },
+        quantity: 1,
+      };
+
+      athena.items[reward] = item;
+
+      applyProfileChanges.push({
+        changeType: "itemAdded",
+        itemId: reward,
+        item,
+      });
+
+      const randomGiftBoxId = uuid();
+
+      const giftBoxTemplate = {
+        templateId: "GiftBox:gb_mfareward",
+        attributes: {
+          lootList: [
+            {
+              itemType: reward,
+              itemGuid: reward,
+              itemProfile: "athena",
+              quantity: 1,
+            },
+          ],
+        },
+        quantity: 1,
+      };
+
+      profile.items[randomGiftBoxId] = giftBoxTemplate;
+      profile.stats.attributes.gifts!.push(giftBoxTemplate);
+
+      applyProfileChanges.push({
+        changeType: "itemAdded",
+        itemId: randomGiftBoxId,
+        item: giftBoxTemplate,
+      });
+
+      athena.stats.attributes.mfa_reward_claimed = true;
+
+      SendMessageToId(
+        JSON.stringify({
+          type: "com.epicgames.gift.received",
+          payload: {},
+          timestamp: new Date().toISOString(),
+        }),
+        user.accountId,
+      );
+
+      applyProfileChanges.push({
+        changeType: "statModified",
+        name: "mfa_enabled",
+        value: true,
+      });
+
+      applyProfileChanges.push({
+        changeType: "statModified",
+        name: "mfa_reward_claimed",
+        value: true,
+      });
+      shouldUpdateProfile = true;
+    }
+  }
+
+  if (shouldUpdateProfile) {
+    profile.rvn++;
+    profile.commandRevision++;
+    profile.updatedAt = new Date().toISOString();
+
+    athena.rvn++;
+    athena.commandRevision++;
+    athena.updatedAt = new Date().toISOString();
+
+    await profilesService.update(user.accountId, "athena", athena);
+    await profilesService.update(user.accountId, "common_core", profile);
+  }
+
+  return c.json(MCPResponses.generate(profile, applyProfileChanges, profileId));
 }

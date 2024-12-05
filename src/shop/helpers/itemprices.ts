@@ -1,3 +1,4 @@
+import { logger } from "../..";
 import type { JSONResponse } from "../interfaces/FortniteAPI";
 
 export function getPrice(item: JSONResponse) {
@@ -21,6 +22,10 @@ export function getPrice(item: JSONResponse) {
         case "Legendary":
           return prices[3];
       }
+      break;
+
+    case "AthenaBackpack":
+      return 100;
       break;
 
     case "AthenaPickaxe":
@@ -74,6 +79,22 @@ export function getPrice(item: JSONResponse) {
       }
       break;
 
+    case "AthenaSkyDiveContrail":
+      // Uncommon, Rare, Epic
+      prices = [200, 500, 800];
+
+      switch (rarity) {
+        case "Uncommon":
+          return prices[0];
+
+        case "Rare":
+          return prices[1];
+
+        case "Epic":
+          return prices[2];
+      }
+      break;
+
     case "AthenaDance":
       // Uncommon, Rare, Epic
       prices = [200, 500, 800];
@@ -88,6 +109,10 @@ export function getPrice(item: JSONResponse) {
         case "Epic":
           return prices[2];
       }
+      break;
+
+    default:
+      logger.error(`Unknown item type: ${item.type.backendValue}`);
       break;
   }
 }

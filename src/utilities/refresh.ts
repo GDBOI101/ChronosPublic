@@ -13,19 +13,6 @@ export default async function RefreshAccount(accountId: string, username: string
           "User-Agent":
             "Fortnite/++Fortnite+Release-10.40-CL-18775446 Windows/10.0.19043.1.256.64bit",
         },
-        body: JSON.stringify({
-          offerId: "e406693aa12adbc8b04ba7e6409c8ab3d598e8c3",
-          currency: "MtxCurrency",
-          currencySubType: "",
-          expectedTotalPrice: "0",
-          gameContext: "",
-          receiverAccountIds: [accountId],
-          giftWrapTemplateId: "GiftBox:gb_makegood",
-          personalMessage: "Thank you for playing Fortnite",
-          accountId: accountId,
-          playerName: username,
-          receiverPlayerName: username,
-        }),
       },
     );
 

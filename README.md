@@ -4,9 +4,13 @@
 
 **Universal Fortnite Backend written in TypeScript using Postgres powered by TypeORM**
 
-## Supported MCP Operations
+## NOTE
 
-`QueryProfile` `BulkEquipBattleRoyaleCustomization` `ClaimMfaEnabled` `PurchaseCatalogEntry` `MarkItemSeen` `RefundMtxPurchase` `RemoveGiftBox` `SetBattleRoyaleBanner` `SetCosmeticLockerSlot` `SetMtxPlatform` `EquipBattleRoyaleCustomization` `SetItemFavoriteStatusBatch` `GiftCatalogEntry` `ClientQuestLogin` `MarkNewQuestNotificationSent`
+This was made for a private project, it is not made for public use and is very buggy and unfinished.
+
+## TODO
+
+Read todo here [TODO.md](./TODO.md)
 
 ## Requirements
 
@@ -14,41 +18,13 @@
 - [Git](https://git-scm.com/downloads)
 - [Postgres](https://www.postgresql.org/download/)
 
-## Installation
-
-1. **Clone the repository:**
-
-```bash
-git clone https://github.com/chloefrfr/ChronosPublic
-```
-
-2. **Install packages**
-
-```bash
-bun install
-```
-
-3. **Configure environment variables:**
-
-Rename `.example.env` to `.env` and provide the necessary information.
-
-4. **Configure hosting:**
-
-To set up your game server and choose regional IP addresses for matchmaking, go to `hosting/hostOptions.ts`.
-
-5. **Run**
-
-```bash
-bun run src/index.ts
-```
-
 ## What's Next?
 
-- Save the World (Will never be finished)
-- TCP XMPP
+- Save the World (Works decently well, very buggy quest progression and not made for public use)
 
 # Available Quests
 
+- **Season 6:** Daily & Week 1 Quests
 - **Season 7:** Daily & Week 1 Quests
 - **Season 8:** Daily & Week 1 Quests
 - **Season 9:** Daily & Week 1 Quests
@@ -75,21 +51,8 @@ bun run src/index.ts
 - [ ] Save the World
 - [x] Arena
 - [x] ClientSettings
-- [x] GameSessions
+- [x] GameSessions (works fine)
+- [x] GameSessions Matchmaker (jyzo thanks)
 - [x] Authentication using Permissions (eg... `fortnite:profile:abcd1234:commands`)
 - [x] Leaderboards (Stats)
-
-## Maybe Features?
-
-- [ ] IP Bans
-- [ ] Seasonal Rewards
-- [ ] Tournaments
-
-## Planned Bot Commands
-
-- [x] Vbucks command
-- [x] Stats command
-- [ ] Arena leaderboard command
-- [ ] Tournament leaderboard command
-- [x] Player count command
-- [x] User lookup command
+- [x] Launcher stuff (node for public use, you can try to use it)

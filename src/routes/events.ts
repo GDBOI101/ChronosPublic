@@ -58,78 +58,82 @@ export default function () {
       );
     }
 
-    const events: Event[] = await Bun.file(
-      path.join(__dirname, "..", "memory", "events", "events.json"),
-    ).json();
+    if (uahelper.season >= 8) {
+      const events: Event[] = await Bun.file(
+        path.join(__dirname, "..", "memory", "events", "events.json"),
+      ).json();
 
-    const arenaTemplates: ArenaTemplate[] = await Bun.file(
-      path.join(__dirname, "..", "memory", "events", "templates", "ArenaTemplate.json"),
-    ).json();
+      const arenaTemplates: ArenaTemplate[] = await Bun.file(
+        path.join(__dirname, "..", "memory", "events", "templates", "ArenaTemplate.json"),
+      ).json();
 
-    events.forEach((event) => {
-      event.eventId = event.eventId.replace(/S13/g, `S${uahelper.season}`);
-      event.eventWindows.forEach((window) => {
-        window.eventTemplateId = window.eventTemplateId.replace(/S13/g, `S${uahelper.season}`);
-        window.eventWindowId = window.eventWindowId.replace(/S13/g, `S${uahelper.season}`);
-        window.requireAllTokens = window.requireAllTokens.map((token) =>
-          token.replace(/S13/g, `S${uahelper.season}`),
-        );
-        window.requireNoneTokensCaller = window.requireNoneTokensCaller.map((token) =>
-          token.replace(/S13/g, `S${uahelper.season}`),
-        );
+      events.forEach((event) => {
+        event.eventId = event.eventId.replace(/S13/g, `S${uahelper.season}`);
+        event.eventWindows.forEach((window) => {
+          window.eventTemplateId = window.eventTemplateId.replace(/S13/g, `S${uahelper.season}`);
+          window.eventWindowId = window.eventWindowId.replace(/S13/g, `S${uahelper.season}`);
+          window.requireAllTokens = window.requireAllTokens.map((token) =>
+            token.replace(/S13/g, `S${uahelper.season}`),
+          );
+          window.requireNoneTokensCaller = window.requireNoneTokensCaller.map((token) =>
+            token.replace(/S13/g, `S${uahelper.season}`),
+          );
+        });
       });
-    });
 
-    arenaTemplates.forEach((template) => {
-      template.eventTemplateId = template.eventTemplateId.replace(/S13/g, `S${uahelper.season}`);
-    });
+      arenaTemplates.forEach((template) => {
+        template.eventTemplateId = template.eventTemplateId.replace(/S13/g, `S${uahelper.season}`);
+      });
 
-    const entries: string[] = [];
+      const entries: string[] = [];
 
-    for (let division = 1; division <= 10; division++) {
-      entries.push(
-        `epicgames_Arena_S${uahelper.season}_Solo:Arena_S${uahelper.season}_Division${division}_Solo`,
-      );
+      for (let division = 1; division <= 10; division++) {
+        entries.push(
+          `epicgames_Arena_S${uahelper.season}_Solo:Arena_S${uahelper.season}_Division${division}_Solo`,
+        );
+      }
+
+      // entries.unshift(`epicgames_Arena_S${uahelper.season}_Solo:Arena_S${uahelper.season}_Solo`);
+
+      const teams = entries.reduce((acc: { [key: string]: string[] }, entry) => {
+        acc[entry] = [user.accountId];
+        return acc;
+      }, {});
+
+      await hypeService.create(uahelper.season);
+
+      const hype = await hypeService.getAll();
+
+      const hypeTokens: string[] = [];
+
+      hype.forEach((token) => {
+        if (
+          account.arenaHype >= token.minimum_required_hype &&
+          account.arenaHype <= parseInt(token.maximum_required_hype)
+        ) {
+          hypeTokens.push(token.name);
+        }
+      });
+
+      return c.json({
+        events,
+        player: {
+          accountId: user.accountId,
+          gameId: "Fortnite",
+          groupIdentity: {},
+          pendingPayouts: [],
+          pendingPenalties: {},
+          persistentScores: {
+            Hype: account.arenaHype,
+          },
+          teams,
+          tokens: hypeTokens,
+        },
+        templates: arenaTemplates,
+      });
     }
 
-    // entries.unshift(`epicgames_Arena_S${uahelper.season}_Solo:Arena_S${uahelper.season}_Solo`);
-
-    const teams = entries.reduce((acc, entry) => {
-      // @ts-ignore
-      acc[entry] = [user.accountId];
-      return acc;
-    }, {});
-
-    await hypeService.create(uahelper.season);
-
-    const hype = await hypeService.getAll();
-
-    const hypeTokens: string[] = [];
-
-    hype.forEach((token) => {
-      if (
-        account.arenaHype >= token.minimum_required_hype &&
-        account.arenaHype <= parseInt(token.maximum_required_hype)
-      ) {
-        hypeTokens.push(token.name);
-      }
-    });
-
-    return c.json({
-      events,
-      player: {
-        accountId: user.accountId,
-        gameId: "Fortnite",
-        groupIdentity: {},
-        pendingPayouts: [],
-        pendingPenalties: {},
-        persistentScores: {
-          Hype: account.arenaHype,
-        },
-        teams,
-        tokens: hypeTokens,
-      },
-      templates: arenaTemplates,
-    });
+    // TODO: Add Support for tounrnaments for S6 and S7 in the future.
+    return c.json({});
   });
 }

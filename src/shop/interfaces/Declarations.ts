@@ -2,7 +2,7 @@ import type { GuildDefaultMessageNotifications } from "discord.js";
 import type { JSONResponse } from "./FortniteAPI";
 
 export type StorefrontNames = "BRWeeklyStorefront" | "BRDailyStorefront";
-type CurrencyType = "RealMoney" | "MtxCurrency";
+type CurrencyType = "RealMoney" | "MtxCurrency" | "GameItem";
 
 export interface Set {
   value: string;
@@ -22,9 +22,71 @@ export interface Storefronts {
   catalogEntries: Entries[];
 }
 
+export interface CurrencyStorefront {
+  name: string;
+  catalogEntries: CurrencyEntry[];
+}
+
+export interface CardPackStorefront {
+  name: string;
+  catalogEntries: CardPackEntry[];
+}
+
 export interface BattlePassStorefront {
   name: string;
   catalogEntries: BattlePassEntry[];
+}
+
+export interface CurrencyEntry {
+  offerId: string;
+  devName: string;
+  offerType: string;
+  prices: Prices[];
+  categories: [];
+  dailyLimit: number;
+  weeklyLimit: number;
+  monthlyLimit: number;
+  appStoreId: string[];
+  requirements: Requirements[];
+  metaInfo: MetaInfo[];
+  meta: Meta;
+  catalogGroup: string;
+  catalogGroupPriority: number;
+  sortPriority: number;
+  title: string;
+  shortDescription: string;
+  description: string;
+  displayAssetPath: string;
+  itemGrants: ItemGrants[];
+}
+
+export interface CardPackEntry {
+  offerId: string;
+  devName: string;
+  offerType: string;
+  prices: Prices[];
+  categories: string[];
+  dailyLimit: number;
+  weeklyLimit: number;
+  monthlyLimit: number;
+  appStoreId: string[];
+  requirements: Requirements[];
+  metaInfo: MetaInfo[];
+  metaAssetInfo: {
+    structName: string;
+    payload: {
+      chaseItems: string[];
+      packDefinition: string;
+    };
+  };
+  catalogGroup: string;
+  catalogGroupPriority: number;
+  sortPriority: number;
+  title: string;
+  shortDescription: string;
+  description: string;
+  displayAssetPath: string;
+  itemGrants: ItemGrants[];
 }
 
 export interface Entries {
@@ -103,6 +165,14 @@ export interface Meta {
   inDate: string;
   outDate: string;
   displayAssetPath: string;
+  bUseSharedDisplay: string;
+  SharedDisplayPriority: string;
+  IconSize: string;
+  OriginalOffer: string;
+  ExtraBonus: number;
+  Priority: number;
+  FeaturedImageUrl: string;
+  CurrencyAnalyticsName: String;
 }
 
 export interface ItemGrants {
@@ -132,8 +202,9 @@ export interface Prices {
   currencyType: CurrencyType;
   currencySubType: string;
   regularPrice: number;
-  dynamicRegularPrice: number;
+  dynamicRegularPrice?: number;
   finalPrice: number;
+  saleType?: string;
   saleExpiration: string;
   basePrice: number;
 }

@@ -1,254 +1,320 @@
 import type { Context } from "hono";
-import { app, userService } from "..";
+import { app, friendsService, logger, userService } from "..";
 import { Validation } from "../middleware/validation";
 import errors from "../utilities/errors";
-import { XmppService } from "../sockets/xmpp/saved/XmppServices";
-import { randomUUID } from "node:crypto";
+import { XmppService, type PartyMember } from "../sockets/xmpp/saved/XmppServices";
+import { v4 as uuid } from "uuid";
 import uaparser from "../utilities/uaparser";
-import { time } from "discord.js";
-import { date } from "zod";
+import xmlbuilder from "xmlbuilder";
 import { SendMessageToId } from "../sockets/xmpp/utilities/SendMessageToId";
 
 export default function () {
-  app.get(
-    "/party/api/v1/Fortnite/user/:accountId/notifications/undelivered/count",
-    Validation.verifyToken,
-    async (c) => {
-      const accountId = c.req.param("accountId");
-
-      const pingsCount = XmppService.pings.filter((ping) => ping.sent_to === accountId).length;
-
-      const party = Object.values(XmppService.parties).find((member) =>
-        member.members.some((m) => m.account_id === accountId),
-      );
-
-      const invitesCount = party
-        ? party.invites.filter((invite) => invite.sent_to === accountId).length
-        : 0;
-
-      return c.json({ pings: pingsCount, invites: invitesCount });
-    },
-  );
-
-  app.get("/party/api/v1/Fortnite/user/:accountId", Validation.verifyToken, async (c) => {
+  app.get("/party/api/v1/Fortnite/user/:accountId", async (c) => {
     const accountId = c.req.param("accountId");
-
-    const parties = Object.values(XmppService.parties).filter((party) =>
-      party.members.some((m) => m.account_id === accountId),
+    const foundParty = Object.values(XmppService.parties).find((party) =>
+      party.members.some((member) => member.account_id === accountId),
     );
-
     return c.json({
-      current: parties.length > 0 ? parties : [],
+      current: foundParty || [],
       pending: [],
       invites: [],
-      pings: XmppService.pings.filter((ping) => ping.sent_to === accountId),
+      pings: [],
     });
   });
 
-  app.post("/party/api/v1/Fortnite/parties", Validation.verifyToken, async (c) => {
+  app.post("/party/api/v1/Fortnite/parties", async (c) => {
     const body = await c.req.json();
-    const timestamp = new Date().toISOString();
-
-    const { join_info, config, meta } = body;
-
-    if (!join_info || !join_info.connection) {
-      return c.json(
-        errors.createError(
-          400,
-          c.req.url,
-          "JoinInfo or JoinInfoConnection was not found.",
-          timestamp,
-        ),
-      );
-    }
-
-    const partyId = randomUUID();
+    const id = uuid().replace(/-/g, "");
+    const currentTimeISO = new Date().toISOString();
 
     const party = {
-      id: partyId,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      config,
+      id,
+      created_at: currentTimeISO,
+      updated_at: currentTimeISO,
+      config: body.config,
       members: [
         {
-          account_id: (join_info.connection.id || "").split("@prod")[0],
-          meta: join_info.meta || {},
+          account_id: body.join_info.connection.id?.split("@prod")[0] || "",
+          meta: body.join_info.meta || {},
           connections: [
             {
-              id: join_info.connection.id || "",
-              connected_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              yield_leadership: join_info.connection.yield_leadership || false,
-              meta: join_info.connection.meta || {},
+              id: body.join_info.connection.id || "",
+              connected_at: currentTimeISO,
+              updated_at: currentTimeISO,
+              yield_leadership: body.join_info.connection.yield_leadership,
+              meta: body.join_info.connection.meta || {},
             },
           ],
           revision: 0,
-          updated_at: new Date().toISOString(),
-          joined_at: new Date().toISOString(),
+          updated_at: currentTimeISO,
+          joined_at: currentTimeISO,
           role: "CAPTAIN",
         },
       ],
-      applicants: [],
-      meta: meta || {},
+      meta: body.meta || {},
       invites: [],
+      applicants: [],
       revision: 0,
+      intentions: [],
     };
 
-    XmppService.parties[partyId] = party;
+    XmppService.parties[id] = party;
+    return c.json(party);
+  });
+
+  app.get("/party/api/v1/Fortnite/parties/:partyId", async (c) => {
+    const partyId = c.req.param("partyId");
+    const party = XmppService.parties[partyId];
+
+    if (!party) {
+      const timestamp = new Date().toISOString();
+      return c.json(errors.createError(404, c.req.url, "Party not found.", timestamp), 404);
+    }
 
     return c.json(party);
   });
 
   app.patch("/party/api/v1/Fortnite/parties/:partyId", Validation.verifyToken, async (c) => {
     const partyId = c.req.param("partyId");
-    const newParty = XmppService.parties[partyId];
-    const timestamp = new Date().toISOString();
+    const party = XmppService.parties[partyId];
+
+    if (!party) {
+      const timestamp = new Date().toISOString();
+      return c.json(errors.createError(404, c.req.url, "Party not found.", timestamp), 404);
+    }
 
     const body = await c.req.json();
+    const user = c.get("user");
+    const clientIndex = XmppService.clients.findIndex(
+      (client) => client.accountId === user.accountId,
+    );
 
-    if (!newParty) {
-      return c.json(
-        errors.createError(
-          400,
-          c.req.url,
-          `Party with the id '${partyId}' does not exist.`,
-          timestamp,
-        ),
-      );
+    if (clientIndex === -1) {
+      const timestamp = new Date().toISOString();
+      return c.json(errors.createError(404, c.req.url, "Client not found.", timestamp), 404);
+    }
+    if (body.config) {
+      Object.assign(party.config, body.config);
     }
 
-    const { config, meta, revision } = body;
-
-    if (config) {
-      Object.assign(newParty.config, config);
+    if (Array.isArray(body.meta.delete)) {
+      body.meta.delete.forEach((prop: any) => delete party.meta[prop]);
     }
 
-    if (meta) {
-      for (const property of Object.keys(meta.delete || {})) {
-        delete newParty.meta[property];
-      }
-
-      Object.assign(newParty.meta, meta.update || {});
+    if (body.meta.update) {
+      Object.assign(party.meta, body.meta.update);
     }
 
-    newParty.revision = revision;
-    newParty.updated_at = new Date().toISOString();
+    party.revision++;
 
-    const captain = newParty.members.find((member) => member.role === "CAPTAIN");
+    const captain = party.members.find((member) => member.role === "CAPTAIN");
 
-    XmppService.parties[partyId] = newParty;
+    party.updated_at = new Date().toISOString();
+    XmppService.parties[partyId] = party;
 
-    newParty.members.forEach(async (member) => {
-      SendMessageToId(
-        JSON.stringify({
-          captain_id: captain!.account_id,
-          created_at: newParty.created_at,
-          invite_ttl_seconds: 14400,
-          max_number_of_members: newParty.config.max_size,
-          ns: "Fortnite",
-          party_id: newParty.id,
-          party_privacy_type: newParty.config.joinability,
-          party_state_overriden: {},
-          party_state_removed: meta.delete,
-          party_state_updated: meta.update,
-          party_sub_type: newParty.meta["urn:epic:cfg:party-type-id_s"],
-          party_type: "DEFAULT",
-          revision: newParty.revision,
-          sent: new Date().toISOString(),
-          type: "com.epicgames.social.party.notification.v0.PARTY_UPDATED",
-          updated_at: new Date().toISOString(),
-        }),
-        member.account_id,
+    party.members.forEach((member) => {
+      const client = XmppService.clients.find((c) => c.accountId === member.account_id);
+      if (!client) return;
+
+      client.socket.send(
+        xmlbuilder
+          .create("message")
+          .attribute("xmlns", "jabber:client")
+          .attribute("to", client.jid)
+          .attribute("from", "xmpp-admin@prod.ol.epicgames.com")
+          .element(
+            "body",
+            JSON.stringify({
+              captain_id: captain!.account_id,
+              party_state_updated: body.meta.update,
+              party_state_removed: body.meta.delete,
+              party_state_overriden: body.meta.update,
+              party_privacy_type: party.config["joinability"],
+              party_type: party.config["type"],
+              party_sub_type: party.config["sub_type"],
+              max_number_of_members: party.config["max_size"],
+              invite_ttl_seconds: party.config["invite_ttl"],
+              intention_ttl_seconds: party.config["intention_ttl"],
+              updated_at: new Date().toISOString(),
+              created_at: party.created_at,
+              ns: "Fortnite",
+              party_id: party.id,
+              sent: new Date().toISOString(),
+              revision: party.revision,
+              type: "com.epicgames.social.party.notification.v0.PARTY_UPDATED",
+            }),
+          )
+          .up()
+          .toString(),
       );
     });
 
     return c.body(null, 200);
   });
 
+  app.post(
+    "/party/api/v1/Fortnite/parties/:partyId/invites/:accountId",
+    Validation.verifyToken,
+    async (c) => {
+      const partyId = c.req.param("partyId");
+      const accountId = c.req.param("accountId");
+      const party = XmppService.parties[partyId];
+      const timestamp = new Date().toISOString();
+
+      if (!party) {
+        return c.json(errors.createError(404, c.req.url, "Party not found.", timestamp), 404);
+      }
+
+      const body = await c.req.json();
+      const date = new Date();
+      date.setHours(date.getHours() + 1);
+
+      const newInvite = {
+        party_id: party.id,
+        sent_by: c.get("user").accountId,
+        meta: body,
+        sent_to: accountId,
+        sent_at: timestamp,
+        updated_at: timestamp,
+        expires_at: date.toISOString(),
+        status: "SENT",
+      };
+
+      party.invites.push(newInvite);
+      party.updated_at = timestamp;
+      XmppService.parties[partyId] = party;
+
+      const inviter = party.members.find((member) => member.account_id === c.get("user").accountId);
+      if (!inviter) {
+        return c.json(errors.createError(404, c.req.url, "Inviter not found.", timestamp), 404);
+      }
+
+      const friends = await friendsService.findFriendByAccountId(c.get("user").accountId);
+      if (!friends) {
+        return c.json(errors.createError(404, c.req.url, "Friend not found.", timestamp), 404);
+      }
+
+      const client = XmppService.clients.find((cl) => cl.accountId === accountId);
+      if (client) {
+        const inviteDetails = {
+          expires: newInvite.expires_at,
+          meta: body,
+          ns: "Fortnite",
+          party_id: party.id,
+          inviter_dn: inviter.meta["urn:epic:member:dn_s"],
+          inviter_id: c.get("user").accountId,
+          invitee_id: accountId,
+          members_count: party.members.length,
+          sent_at: newInvite.sent_at,
+          updated_at: newInvite.updated_at,
+          friends_ids: party.members
+            .filter((member) =>
+              friends.accepted.some((friend) => friend.accountId === member.account_id),
+            )
+            .map((member) => member.account_id),
+          sent: timestamp,
+          type: "com.epicgames.social.party.notification.v0.INITIAL_INVITE",
+        };
+
+        const message = xmlbuilder
+          .create("message")
+          .attribute("xmlns", "jabber:client")
+          .attribute("to", client.jid)
+          .attribute("from", "xmpp-admin@prod.ol.epicgames.com")
+          .element("body", JSON.stringify(inviteDetails))
+          .up()
+          .toString();
+
+        client.socket.send(message);
+      }
+
+      const sendPing = c.req.query("sendPing");
+      if (sendPing === "true") {
+        // TODO
+      }
+
+      return c.body(null, 200);
+    },
+  );
+
   app.patch(
     "/party/api/v1/Fortnite/parties/:partyId/members/:accountId/meta",
     Validation.verifyToken,
     async (c) => {
-      const accountId = c.req.param("accountId");
       const partyId = c.req.param("partyId");
+      const accountId = c.req.param("accountId");
+      const party = XmppService.parties[partyId];
 
-      const newParty = XmppService.parties[partyId];
       const timestamp = new Date().toISOString();
+
+      if (!party) {
+        return c.json(errors.createError(404, c.req.url, "Party not found.", timestamp), 404);
+      }
 
       const body = await c.req.json();
 
-      const { delete: MetaDelete = {}, update = {}, revision } = body;
+      let memberIndex: number = -1;
 
-      if (!newParty) {
-        return c.json(
-          errors.createError(
-            400,
-            c.req.url,
-            `Party with the id '${partyId}' does not exist.`,
-            timestamp,
-          ),
-        );
+      for (const member of party.members) {
+        if (member.account_id == accountId) {
+          memberIndex = party.members.indexOf(member);
+          break;
+        }
       }
 
-      const member = newParty.members.find((m) => m.account_id === accountId);
+      const member = party.members[memberIndex];
 
-      if (!member) {
-        return c.json(errors.createError(404, c.req.url, "Member not found.", timestamp));
+      for (var prop of Object.keys(body.delete)) {
+        delete member.meta[prop];
       }
 
-      for (const property of Object.keys(MetaDelete)) {
-        delete member.meta[property];
+      for (var prop of Object.keys(body.update)) {
+        member.meta[prop] = body.update[prop];
       }
 
-      Object.assign(member.meta, update);
-      member.revision = revision;
       member.updated_at = new Date().toISOString();
-      newParty.updated_at = new Date().toISOString();
+      party.members[memberIndex] = member;
+      party.updated_at = new Date().toISOString();
+      XmppService.parties[partyId] = party;
 
-      XmppService.parties[partyId] = newParty;
+      party.members.forEach((member) => {
+        const client = XmppService.clients.find((c) => c.accountId === member.account_id);
 
-      newParty.members.forEach((m) => {
-        SendMessageToId(
-          JSON.stringify({
-            account_id: accountId,
-            account_dn: m.meta["urn:epic:member:dn_s"],
-            member_state_updated: update,
-            member_state_removed: MetaDelete,
-            member_state_overridden: {},
-            party_id: newParty.id,
-            updated_at: new Date().toISOString(),
-            sent: new Date().toISOString(),
-            revision: member.revision,
-            ns: "Fortnite",
-            type: "com.epicgames.social.party.notification.v0.MEMBER_STATE_UPDATED",
-          }),
-          m.account_id,
+        if (!client) {
+          logger.debug("why do you not work retard");
+          return;
+        }
+
+        client.socket.send(
+          xmlbuilder
+            .create("message")
+            .attribute("xmlns", "jabber:client")
+            .attribute("to", client.jid)
+            .attribute("from", "xmpp-admin@prod.ol.epicgames.com")
+            .element(
+              "body",
+              JSON.stringify({
+                account_id: accountId,
+                account_dn: member.meta["urn:epic:member:dn_s"],
+                member_state_updated: body.update,
+                member_state_removed: body.delete,
+                member_state_overridden: {},
+                party_id: party.id,
+                updated_at: new Date().toISOString(),
+                sent: new Date().toISOString(),
+                revision: member.revision,
+                ns: "Fortnite",
+                type: "com.epicgames.social.party.notification.v0.MEMBER_STATE_UPDATED",
+              }),
+            )
+            .up()
+            .toString(),
         );
       });
 
       return c.body(null, 200);
     },
   );
-
-  app.get("/party/api/v1/Fortnite/parties/:partyId", Validation.verifyToken, async (c) => {
-    const partyId = c.req.param("partyId");
-
-    const newParty = XmppService.parties[partyId];
-    const timestamp = new Date().toISOString();
-
-    if (!newParty) {
-      return c.json(
-        errors.createError(
-          400,
-          c.req.url,
-          `Party with the id '${partyId}' does not exist.`,
-          timestamp,
-        ),
-      );
-    }
-
-    return c.json(newParty);
-  });
 
   app.delete(
     "/party/api/v1/Fortnite/parties/:partyId/members/:accountId",
@@ -256,11 +322,10 @@ export default function () {
     async (c) => {
       const partyId = c.req.param("partyId");
       const accountId = c.req.param("accountId");
-
-      const newParty = XmppService.parties[partyId];
       const timestamp = new Date().toISOString();
+      const party = XmppService.parties[partyId];
 
-      if (!newParty) {
+      if (!party) {
         return c.json(
           errors.createError(
             400,
@@ -268,121 +333,326 @@ export default function () {
             `Party with the id '${partyId}' does not exist.`,
             timestamp,
           ),
+          400,
         );
       }
 
-      const memberIndex = newParty.members.findIndex((member) => member.account_id === accountId);
+      const memberIndex = party.members.findIndex((member) => member.account_id === accountId);
 
       if (memberIndex === -1) {
-        return c.json(errors.createError(404, c.req.url, "Member not found.", timestamp));
+        const timestamp = new Date().toISOString();
+        return c.json(errors.createError(404, c.req.url, "Member not found.", timestamp), 404);
       }
 
-      newParty.members.forEach((m) => {
-        SendMessageToId(
-          JSON.stringify({
-            account_id: accountId,
-            member_state_update: {},
-            ns: "Fortnite",
-            party_id: newParty.id,
-            revision: newParty.revision || 0,
-            sent: new Date().toISOString(),
-            type: "com.epicgames.social.party.notification.v0.MEMBER_LEFT",
-          }),
-          m.account_id,
+      const member = party.members[memberIndex];
+
+      if (c.get("user").accountId !== accountId && !member.captain) {
+        return c.json(errors.createError(403, c.req.url, "User not authorized.", timestamp), 403);
+      }
+
+      const removedMember = party.members[memberIndex];
+
+      party.members.splice(memberIndex, 1);
+      party.revision++;
+      party.updated_at = new Date().toISOString();
+      XmppService.parties[partyId] = party;
+
+      party.members.forEach((member) => {
+        const client = XmppService.clients.find((cl) => cl.accountId === member.account_id);
+
+        if (!client) return;
+
+        client.socket.send(
+          xmlbuilder
+            .create("message")
+            .attribute("xmlns", "jabber:client")
+            .attribute("to", client.jid)
+            .attribute("from", "xmpp-admin@prod.ol.epicgames.com")
+            .element(
+              "body",
+              JSON.stringify({
+                account_id: removedMember.account_id,
+                party_id: party.id,
+                kicked: true,
+                updated_at: new Date().toISOString(),
+                sent: new Date().toISOString(),
+                revision: party.revision,
+                ns: "Fortnite",
+                type: "com.epicgames.social.party.notification.v0.MEMBER_LEFT",
+              }),
+            )
+            .up()
+            .toString(),
         );
       });
 
-      newParty.members.splice(memberIndex, 1);
-
-      if (newParty.members.length === 0) {
+      if (party.members.length === 0) {
         delete XmppService.parties[partyId];
+      }
+
+      const assignmentKey = party.meta["Default:RawSquadAssignments_j"] || "RawSquadAssignments_j";
+
+      if (party.meta[assignmentKey]) {
+        const rawSquadAssignment = JSON.parse(party.meta[assignmentKey]);
+        const index = rawSquadAssignment.RawSquadAssignments.findIndex(
+          (a: any) => a.memberId === accountId,
+        );
+
+        if (index !== -1) {
+          rawSquadAssignment.RawSquadAssignments.splice(index, 1);
+          party.meta[assignmentKey] = JSON.stringify(rawSquadAssignment);
+        }
+
+        let captain = party.members.find((member) => member.captain === "CAPTAIN");
+
+        if (!captain) {
+          captain = party.members[0];
+          if (captain) {
+            captain.role = "CAPTAIN";
+          }
+        }
+
+        party.updated_at = new Date().toISOString();
+        XmppService.parties[partyId] = party;
+
+        party.members.forEach((member) => {
+          const client = XmppService.clients.find((cl) => cl.accountId === member.account_id);
+          if (client) {
+            const message = {
+              captain_id: captain?.account_id || "",
+              created_at: party.created_at,
+              invite_ttl_seconds: 14400,
+              max_number_of_members: 16,
+              ns: "Fortnite",
+              party_id: party.id,
+              party_privacy_type: party.config.joinability,
+              party_state_overriden: {},
+              party_state_removed: [],
+              party_state_updated: {
+                [assignmentKey]: party.meta[assignmentKey],
+              },
+              party_sub_type: party.meta["urn:epic:cfg:party-type-id_s"],
+              party_type: "DEFAULT",
+              revision: party.revision,
+              sent: new Date().toISOString(),
+              type: "com.epicgames.social.party.notification.v0.PARTY_UPDATED",
+              updated_at: new Date().toISOString(),
+            };
+
+            client.socket.send(
+              xmlbuilder
+                .create("message")
+                .attribute("xmlns", "jabber:client")
+                .attribute("to", client.jid)
+                .attribute("from", "xmpp-admin@prod.ol.epicgames.com")
+                .element("body", JSON.stringify(message))
+                .up()
+                .toString(),
+            );
+          }
+        });
       }
 
       return c.body(null, 200);
     },
   );
+
   app.post(
     "/party/api/v1/Fortnite/parties/:partyId/members/:accountId/join",
     Validation.verifyToken,
     async (c) => {
-      const partyId = c.req.param("partyId");
-      const accountId = c.req.param("accountId");
-
-      const newParty = XmppService.parties[partyId];
-      const timestamp = new Date().toISOString();
-
-      const { meta, connection } = await c.req.json();
-
-      if (!newParty) {
-        return c.json({
-          error: {
-            status: 400,
-            message: `Party with the id '${partyId}' does not exist.`,
+      const { partyId, accountId } = c.req.param();
+      const party = XmppService.parties[partyId];
+      if (!party) {
+        const timestamp = new Date().toISOString();
+        return c.json(
+          errors.createError(
+            400,
+            c.req.url,
+            `Party with the id '${partyId}' does not exist.`,
             timestamp,
-          },
-        });
+          ),
+          400,
+        );
       }
 
-      let memberIndex = newParty.members.findIndex((member) => member.account_id === accountId);
+      const { meta: memberMeta, connection: connectionInfo } = await c.req.json();
+      const memberId = (connectionInfo.id || "").split("@prod")[0];
+      const currentTimestamp = new Date().toISOString();
 
-      if (memberIndex !== -1) {
-        return c.json({
-          status: "JOINED",
-          party_id: newParty.id,
-        });
-      }
+      party.members = party.members.filter((member) => member.account_id !== accountId);
 
-      const partyMember = {
-        account_id: (connection.id || "").split("@prod")[0],
-        meta: meta || {},
+      party.members.push({
+        account_id: connectionInfo.id.split("@")[0],
+        meta: memberMeta,
         connections: [
           {
-            id: connection.id || "",
+            id: connectionInfo.id,
             connected_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
-            yield_leadership: !!connection.yield_leadership,
-            meta: connection.meta || {},
+            yield_leadership: false,
+            meta: connectionInfo.meta,
           },
         ],
         revision: 0,
         updated_at: new Date().toISOString(),
         joined_at: new Date().toISOString(),
-        role: connection.yield_leadership ? "CAPTAIN" : "MEMBER",
-      };
+        role: "MEMBER",
+      });
 
-      newParty.members.push(partyMember);
-      newParty.updated_at = new Date().toISOString();
+      const squadAssignmentsKey = party.meta["Default:RawSquadAssignments_j"]
+        ? "Default:RawSquadAssignments_j"
+        : "RawSquadAssignments_j";
+      const squadAssignments = JSON.parse(
+        party.meta[squadAssignmentsKey] || '{"RawSquadAssignments":[]}',
+      );
+      squadAssignments.RawSquadAssignments.push({
+        memberId,
+        absoluteMemberIdx: party.members.length - 1,
+      });
+      party.meta[squadAssignmentsKey] = JSON.stringify(squadAssignments);
+      party.revision++;
+      party.updated_at = currentTimestamp;
 
-      XmppService.parties[partyId] = newParty;
+      XmppService.parties[partyId] = party;
 
-      newParty.members.forEach((member) => {
-        SendMessageToId(
-          JSON.stringify({
-            account_dn: connection.meta["urn:epic:member:dn_s"],
-            account_id: (connection.id || "").split("@prod")[0],
-            connection: {
-              connected_at: new Date().toISOString(),
-              id: connection.id,
-              meta: connection.meta,
-              updated_at: new Date().toISOString(),
-            },
-            joined_at: new Date().toISOString(),
-            member_state_updated: meta || {},
-            ns: "Fortnite",
-            party_id: newParty.id,
-            revision: 0,
-            sent: new Date().toISOString(),
+      const partyCaptain = party.members.find((member) => member.role === "CAPTAIN");
+
+      party.members.forEach((member) => {
+        const client = XmppService.clients.find((cl: any) => cl.accountId === member.account_id);
+
+        if (!client?.socket) return;
+
+        const { socket } = client;
+        const notifications = [
+          {
             type: "com.epicgames.social.party.notification.v0.MEMBER_JOINED",
-            updated_at: new Date().toISOString(),
-          }),
-          member.account_id,
-        );
+            body: {
+              account_dn: connectionInfo.meta["urn:epic:member:dn_s"],
+              account_id: memberId,
+              connection: {
+                connected_at: currentTimestamp,
+                id: connectionInfo.id,
+                meta: connectionInfo.meta,
+                updated_at: currentTimestamp,
+              },
+              joined_at: currentTimestamp,
+              member_state_updated: memberMeta || {},
+              ns: "Fortnite",
+              party_id: party.id,
+              revision: 0,
+              sent: currentTimestamp,
+              type: "com.epicgames.social.party.notification.v0.MEMBER_JOINED",
+              updated_at: currentTimestamp,
+            },
+          },
+          {
+            type: "com.epicgames.social.party.notification.v0.PARTY_UPDATED",
+            body: {
+              captain_id: partyCaptain?.account_id,
+              created_at: party.created_at,
+              invite_ttl_seconds: 14400,
+              max_number_of_members: 16,
+              ns: "Fortnite",
+              party_id: party.id,
+              party_privacy_type: "PUBLIC",
+              party_state_overriden: {},
+              party_state_removed: [],
+              party_state_updated: { [squadAssignmentsKey]: JSON.stringify(squadAssignments) },
+              party_sub_type: "default",
+              party_type: "DEFAULT",
+              revision: party.revision,
+              sent: currentTimestamp,
+              type: "com.epicgames.social.party.notification.v0.PARTY_UPDATED",
+              updated_at: currentTimestamp,
+            },
+          },
+        ];
+
+        notifications.forEach((notification) => {
+          socket.send(
+            xmlbuilder
+              .create("message")
+              .attribute("xmlns", "jabber:client")
+              .attribute("to", client.jid)
+              .attribute("from", "xmpp-admin@prod.ol.epicgames.com")
+              .element("body", JSON.stringify(notification.body))
+              .up()
+              .toString(),
+          );
+        });
       });
 
-      return c.json({
-        status: "JOINED",
-        party_id: newParty.id,
+      return c.json({ status: "JOINED", party_id: party.id });
+    },
+  );
+
+  app.post(
+    "/party/api/v1/Fortnite/parties/:partyId/members/:accountId/promote",
+    Validation.verifyToken,
+    async (c) => {
+      const accountId = c.req.param("accountId");
+      const partyId = c.req.param("partyId");
+      const timestamp = new Date().toISOString();
+
+      const party = XmppService.parties[partyId];
+
+      if (!party) {
+        return c.json(
+          errors.createError(
+            400,
+            c.req.url,
+            `Party with the id '${partyId}' does not exist.`,
+            timestamp,
+          ),
+          400,
+        );
+      }
+
+      const captainIndex = party.members.findIndex((member) => member.role === "CAPTAIN");
+      const newCaptainIndex = party.members.findIndex((member) => member.account_id === accountId);
+
+      if (newCaptainIndex === -1) {
+        return c.json(errors.createError(404, c.req.url, "Member not found.", timestamp), 404);
+      }
+
+      if (captainIndex !== -1) {
+        party.members[captainIndex].role = "MEMBER";
+      }
+
+      party.members[newCaptainIndex].role = "CAPTAIN";
+      party.updated_at = timestamp;
+      XmppService.parties[partyId] = party;
+
+      party.members.forEach((member) => {
+        const client = XmppService.clients.find((cl) => cl.accountId === member.account_id);
+
+        if (client) {
+          client.socket.send(
+            xmlbuilder
+              .create("message")
+              .attribute("xmlns", "jabber:client")
+              .attribute("to", client.jid)
+              .attribute("from", "xmpp-admin@prod.ol.epicgames.com")
+              .element(
+                "body",
+                JSON.stringify({
+                  account_id: accountId,
+                  member_state_update: {},
+                  ns: "Fortnite",
+                  party_id: party.id,
+                  revision: party.revision || 0,
+                  sent: timestamp,
+                  type: "com.epicgames.social.party.notification.v0.MEMBER_NEW_CAPTAIN",
+                }),
+              )
+              .up()
+              .toString(),
+          );
+        }
       });
+
+      return c.body(null, 200);
     },
   );
 
@@ -390,65 +660,64 @@ export default function () {
     "/party/api/v1/Fortnite/user/:accountId/pings/:pingerId",
     Validation.verifyToken,
     async (c) => {
+      const { accountId, pingerId } = c.req.param();
       const useragent = c.req.header("User-Agent");
       const timestamp = new Date().toISOString();
-      const accountId = c.req.param("accountId");
-      const pingerId = c.req.param("pingerId");
 
-      if (!useragent)
+      if (!useragent) {
         return c.json(
           errors.createError(400, c.req.url, "header 'User-Agent' is missing.", timestamp),
           400,
         );
+      }
 
       const uahelper = uaparser(useragent);
-
-      if (!uahelper)
+      if (!uahelper) {
         return c.json(
           errors.createError(400, c.req.url, "Failed to parse User-Agent.", timestamp),
           400,
         );
+      }
 
-      var pIndex;
-      if (
-        (pIndex = XmppService.pings
-          .filter((p) => p.sent_to == accountId)
-          .findIndex((p) => p.sent_by == pingerId)) != -1
-      )
-        XmppService.pings.splice(pIndex, 1);
+      const pingIndex = XmppService.pings.findIndex(
+        (p) => p.sent_to === accountId && p.sent_by === pingerId,
+      );
+      if (pingIndex !== -1) {
+        XmppService.pings.splice(pingIndex, 1);
+      }
 
-      var d = new Date();
-      d.setHours(d.getHours() + 1);
+      const expirationTime = new Date();
+      expirationTime.setHours(expirationTime.getHours() + 1);
 
-      var ping = {
+      const newPing = {
         sent_by: pingerId,
         sent_to: accountId,
-        sent_at: new Date().toISOString(),
-        expires_at: d.toISOString(),
+        sent_at: timestamp,
+        expires_at: expirationTime.toISOString(),
         meta: {},
       };
-      XmppService.pings.push(ping);
+      XmppService.pings.push(newPing);
 
       const user = await userService.findUserByAccountId(pingerId);
-
-      if (!user)
+      if (!user) {
         return c.json(errors.createError(404, c.req.url, "Failed to find user.", timestamp), 404);
+      }
 
       SendMessageToId(
         accountId,
         JSON.stringify({
-          expires: ping.expires_at,
+          expires: newPing.expires_at,
           meta: {},
           ns: "Fortnite",
           pinger_dn: user.username,
           pinger_id: pingerId,
-          sent: ping.sent_at,
+          sent: newPing.sent_at,
           version: uahelper.season,
           type: "com.epicgames.social.party.notification.v0.PING",
         }),
       );
 
-      return c.json(ping);
+      return c.json(newPing);
     },
   );
 
@@ -456,8 +725,7 @@ export default function () {
     "/party/api/v1/Fortnite/user/:accountId/pings/:pingerId",
     Validation.verifyToken,
     async (c) => {
-      const accountId = c.req.param("accountId");
-      const pingerId = c.req.param("pingerId");
+      const { accountId, pingerId } = c.req.param();
 
       const pingIndex = XmppService.pings.findIndex(
         (ping) => ping.sent_to === accountId && ping.sent_by === pingerId,
@@ -475,13 +743,11 @@ export default function () {
     "/party/api/v1/Fortnite/user/:accountId/pings/:pingerId/parties",
     Validation.verifyToken,
     async (c) => {
-      const accountId = c.req.param("accountId");
-      const pingerId = c.req.param("pingerId");
+      const { accountId, pingerId } = c.req.param();
 
       let queriedPings = XmppService.pings.filter(
         (ping) => ping.sent_to === accountId && ping.sent_by === pingerId,
       );
-
       if (queriedPings.length === 0) {
         queriedPings = [{ sent_by: pingerId }];
       }
@@ -489,23 +755,23 @@ export default function () {
       const parties = Object.values(XmppService.parties);
       const result = queriedPings
         .map((ping) => {
-          const party = parties.find((p) =>
-            p.members.some((member) => member.account_id === ping.sent_by),
+          const party = parties.find((party) =>
+            party.members.some((member) => member.account_id === ping.sent_by),
           );
 
-          if (!party) return null;
-
-          return {
-            id: party.id,
-            created_at: party.created_at,
-            updated_at: party.updated_at,
-            config: party.config,
-            members: party.members,
-            applicants: [],
-            meta: party.meta,
-            invites: [],
-            revision: party.revision || 0,
-          };
+          return party
+            ? {
+                id: party.id,
+                created_at: party.created_at,
+                updated_at: party.updated_at,
+                config: party.config,
+                members: party.members,
+                applicants: [],
+                meta: party.meta,
+                invites: [],
+                revision: party.revision || 0,
+              }
+            : null;
         })
         .filter((party) => party !== null);
 
@@ -517,30 +783,45 @@ export default function () {
     "/party/api/v1/Fortnite/user/:accountId/pings/:pingerId/join",
     Validation.verifyToken,
     async (c) => {
-      const accountId = c.req.param("accountId");
-      const pingerId = c.req.param("pingerId");
-
+      const { accountId, pingerId } = c.req.param();
       const { connection, meta } = await c.req.json();
 
       let ping = XmppService.pings.find((p) => p.sent_to === accountId && p.sent_by === pingerId);
       if (!ping) {
-        ping = { sent_by: pingerId };
+        return c.json(
+          errors.createError(
+            400,
+            c.req.url,
+            `No ping found for '${accountId}' from '${pingerId}'.`,
+            new Date().toISOString(),
+          ),
+          400,
+        );
       }
 
       const newParty = Object.values(XmppService.parties).find((party) =>
         party.members.some((member) => member.account_id === ping.sent_by),
       );
 
-      const memberIndex = newParty!.members.findIndex((member) => member.account_id === accountId);
-      if (memberIndex !== -1) {
-        return c.json({
-          status: "JOINED",
-          party_id: newParty!.id,
-        });
+      if (!newParty) {
+        return c.json(
+          errors.createError(
+            400,
+            c.req.url,
+            `Party not found for ping '${ping.sent_by}'.`,
+            new Date().toISOString(),
+          ),
+          400,
+        );
+      }
+
+      const isAlreadyMember = newParty.members.some((member) => member.account_id === accountId);
+      if (isAlreadyMember) {
+        return c.json({ status: "JOINED", party_id: newParty.id });
       }
 
       const connectionId = (connection.id || "").split("@prod")[0];
-      const mem = {
+      const newMember: PartyMember = {
         account_id: accountId,
         meta: meta || {},
         connections: [
@@ -558,11 +839,11 @@ export default function () {
         role: connection.yield_leadership ? "CAPTAIN" : "MEMBER",
       };
 
-      newParty!.members.push(mem);
-      newParty!.updated_at = new Date().toISOString();
-      XmppService.parties[newParty!.id] = newParty!;
+      newParty.members.push(newMember);
+      newParty.updated_at = new Date().toISOString();
+      XmppService.parties[newParty.id] = newParty;
 
-      newParty!.members.forEach(async (member) => {
+      const sendJoinNotification = (member: PartyMember) => {
         SendMessageToId(
           JSON.stringify({
             account_dn: connection.meta["urn:epic:member:dn_s"],
@@ -576,20 +857,19 @@ export default function () {
             joined_at: new Date().toISOString(),
             member_state_updated: meta || {},
             ns: "Fortnite",
-            party_id: newParty!.id,
-            revision: 0,
+            party_id: newParty.id,
+            revision: newParty.revision || 0,
             sent: new Date().toISOString(),
             type: "com.epicgames.social.party.notification.v0.MEMBER_JOINED",
             updated_at: new Date().toISOString(),
           }),
           member.account_id,
         );
-      });
+      };
 
-      return c.json({
-        status: "JOINED",
-        party_id: newParty!.id,
-      });
+      newParty.members.forEach(sendJoinNotification);
+
+      return c.json({ status: "JOINED", party_id: newParty.id });
     },
   );
 }

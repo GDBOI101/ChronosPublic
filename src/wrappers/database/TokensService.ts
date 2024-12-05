@@ -9,24 +9,24 @@ export default class TokensService {
   constructor(private database: Database) {
     this.tokensRepository = this.database.getRepository("tokens");
   }
-
   public async create(token: Partial<Tokens>, accountId: string): Promise<Tokens | null> {
     try {
-      const existingToken = await this.tokensRepository.findOne({
-        where: {
-          accountId,
-        },
-      });
-
-      if (existingToken) {
-        Object.assign(existingToken, token);
-        await this.tokensRepository.save(existingToken);
-        return existingToken;
-      } else {
-        const newToken = this.tokensRepository.create(token);
-        await this.tokensRepository.save(newToken);
-        return newToken;
+      if (!accountId || !token) {
+        logger.error("Invalid input: accountId or token is missing");
+        return null;
       }
+
+      const savedToken = await this.tokensRepository.upsert(
+        {
+          accountId,
+          ...token,
+        },
+        {
+          conflictPaths: ["accountId", "type"],
+        },
+      );
+
+      return savedToken.generatedMaps[0] as Tokens;
     } catch (error) {
       logger.error(`Error creating/updating token: ${error}`);
       return null;

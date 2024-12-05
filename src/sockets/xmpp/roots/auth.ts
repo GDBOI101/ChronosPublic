@@ -1,11 +1,11 @@
 import type { ServerWebSocket } from "bun";
-import type { ChronosSocket } from "../server";
+import type { LyntSocket } from "../server";
 import xmlparser from "xml-parser";
 import xmlbuilder from "xmlbuilder";
 import { logger, tokensService, userService } from "../../..";
 import { XmppService } from "../saved/XmppServices";
 
-export default async function (socket: ServerWebSocket<ChronosSocket>, clientData: xmlparser.Node) {
+export default async function (socket: ServerWebSocket<LyntSocket>, clientData: xmlparser.Node) {
   if (!clientData || !clientData.content) return socket.close(1008, "Invalid XML");
 
   const decodedBytes = Buffer.from(clientData.content, "base64");

@@ -17,6 +17,15 @@ export interface PastSeasons {
 }
 
 export namespace LevelsManager {
+  export function updateXpAndLevel(bookXp: number, bookLevel: number, increment: number) {
+    bookXp += increment;
+    if (bookXp >= 10) {
+      bookXp = 0;
+      bookLevel += 1;
+    }
+    return { bookXp, bookLevel };
+  }
+
   export async function update(pastSeasons: PastSeasons, season: number) {
     try {
       const SeasonXP = await BattlepassManager.GetSeasonXP();

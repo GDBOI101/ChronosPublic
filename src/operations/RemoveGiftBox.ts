@@ -1,12 +1,11 @@
 import type { Context } from "hono";
 import errors from "../utilities/errors";
 import { accountService, logger, profilesService, userService } from "..";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import { Profiles } from "../tables/profiles";
 import MCPResponses, { type ProfileId } from "../utilities/responses";
 import { handleProfileSelection } from "./QueryProfile";
 
-// Define a type for the request body to improve type safety
 interface UpdateProfileRequestBody {
   giftBoxItemId?: string;
   giftBoxItemIds?: string[];
@@ -71,12 +70,20 @@ export default async function updateProfile(c: Context) {
         404,
       );
 
+    const common_core = await handleProfileSelection("common_core", user.accountId);
+    if (!common_core)
+      return c.json(
+        errors.createError(404, c.req.url, `Profile 'common_core' not found.`, timestamp),
+        404,
+      );
+
     const { giftBoxItemId, giftBoxItemIds } = body;
     const applyProfileChanges = [];
     let shouldUpdateProfile: boolean = false;
 
     if (giftBoxItemId) {
       delete profile.items[giftBoxItemId];
+      delete common_core.items[giftBoxItemId];
 
       applyProfileChanges.push({ changeType: "itemRemoved", itemId: giftBoxItemId });
 
@@ -86,6 +93,7 @@ export default async function updateProfile(c: Context) {
     if (giftBoxItemIds) {
       giftBoxItemIds.forEach((itemId) => {
         delete profile.items[itemId];
+        delete common_core.items[itemId];
 
         applyProfileChanges.push({ changeType: "itemRemoved", itemId });
 
@@ -97,15 +105,14 @@ export default async function updateProfile(c: Context) {
       profile.rvn++;
       profile.commandRevision++;
       profile.updatedAt = new Date().toISOString();
-    }
 
-    await profilesService.updateMultiple([
-      {
-        accountId: user.accountId,
-        data: profile,
-        type: "common_core",
-      },
-    ]);
+      common_core.rvn++;
+      common_core.commandRevision++;
+      common_core.updatedAt = new Date().toISOString();
+
+      await profilesService.update(user.accountId, profileId, profile);
+      await profilesService.update(user.accountId, "common_core", common_core);
+    }
 
     return c.json(MCPResponses.generate(profile, applyProfileChanges, profileId));
   } catch (error) {

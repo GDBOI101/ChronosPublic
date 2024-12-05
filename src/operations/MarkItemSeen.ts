@@ -2,9 +2,10 @@ import type { Context } from "hono";
 import { logger, profilesService, userService } from "..";
 import errors from "../utilities/errors";
 import type { ProfileId } from "../utilities/responses";
-import ProfileHelper from "../utilities/profiles";
+import ProfileHelper from "../utilities/ProfileHelper";
 import MCPResponses from "../utilities/responses";
 import { handleProfileSelection } from "./QueryProfile";
+import { handle } from "hono/cloudflare-pages";
 
 export default async function (c: Context) {
   const timestamp = new Date().toISOString();
@@ -13,24 +14,19 @@ export default async function (c: Context) {
     const accountId = c.req.param("accountId");
     const profileId = c.req.query("profileId") as ProfileId;
 
-    const [user, athenaProfile, profile] = await Promise.all([
-      userService.findUserByAccountId(accountId),
-      handleProfileSelection("athena", accountId),
-      profilesService.findByAccountId(accountId),
-    ]);
+    const [user] = await Promise.all([userService.findUserByAccountId(accountId)]);
 
-    if (!user || !profile || !athenaProfile) {
-      return c.json(
-        errors.createError(400, c.req.url, "User, Profile, or Athena not found.", timestamp),
-      );
+    if (!user) {
+      return c.json(errors.createError(400, c.req.url, "User not found.", timestamp));
     }
 
-    const athena = athenaProfile || {
-      items: {},
-      rvn: 0,
-      commandRevision: 0,
-      updatedAt: new Date().toISOString(),
-    };
+    const profile = await handleProfileSelection(profileId, user.accountId);
+
+    if (!profile) {
+      return c.json(
+        errors.createError(400, c.req.url, `Profile '${profileId}' not found.`, timestamp),
+      );
+    }
 
     let body;
     try {
@@ -41,73 +37,31 @@ export default async function (c: Context) {
 
     const { itemIds } = body;
 
-    const applyProfileChanges = [];
+    if (!itemIds) {
+      return c.json(errors.createError(400, c.req.url, "'itemIds' is missing.", timestamp));
+    }
+
+    const applyProfileChanges: object[] = [];
     let shouldUpdateProfile = false;
 
-    const updatedItems = new Map<string, any>();
+    for (const itemId of itemIds as string[]) {
+      profile.items[itemId].attributes.item_seen = true;
+      applyProfileChanges.push({
+        changeType: "itemAttrChanged",
+        itemId,
+        attributeName: "item_seen",
+        attributeValue: profile.items[itemId].attributes.item_seen,
+      });
 
-    for (const itemId of itemIds) {
-      if (athena.items[itemId]) {
-        if (athena.items[itemId].attributes) {
-          if (!athena.items[itemId].attributes.item_seen) {
-            athena.items[itemId].attributes.item_seen = true;
-            applyProfileChanges.push({
-              changeType: "itemAttrChanged",
-              itemId,
-              attributeName: "item_seen",
-              attributeValue: true,
-            });
-            updatedItems.set(itemId, athena.items[itemId]);
-            shouldUpdateProfile = true;
-          }
-        } else {
-          athena.items[itemId].attributes = { item_seen: true };
-          applyProfileChanges.push({
-            changeType: "itemAttrChanged",
-            itemId,
-            attributeName: "item_seen",
-            attributeValue: true,
-          });
-          updatedItems.set(itemId, athena.items[itemId]);
-          shouldUpdateProfile = true;
-        }
-      } else {
-        athena.items[itemId] = {
-          templateId: itemId,
-          attributes: {
-            level: 1,
-            item_seen: true,
-            xp: 0,
-            variants: [],
-            favorite: false,
-          },
-          quantity: 1,
-        };
-        applyProfileChanges.push({
-          changeType: "itemAdded",
-          itemId,
-          attributeName: "item_seen",
-          attributeValue: true,
-        });
-        updatedItems.set(itemId, athena.items[itemId]);
-        shouldUpdateProfile = true;
-      }
+      shouldUpdateProfile = true;
     }
 
     if (shouldUpdateProfile) {
-      athena.rvn += 1;
-      athena.commandRevision += 1;
-      athena.updatedAt = new Date().toISOString();
+      profile.rvn += 1;
+      profile.commandRevision += 1;
+      profile.updatedAt = new Date().toISOString();
 
-      const updatedProfile = { ...profile, athena };
-
-      await profilesService.updateMultiple([
-        {
-          accountId: user.accountId,
-          type: "athena",
-          data: updatedProfile,
-        },
-      ]);
+      await profilesService.update(user.accountId, profileId, profile);
     }
 
     return c.json(MCPResponses.generate(profile, applyProfileChanges, profileId));

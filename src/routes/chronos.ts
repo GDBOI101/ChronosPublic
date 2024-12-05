@@ -1,11 +1,21 @@
 import axios from "axios";
-import { app, config, logger, profilesService, userService } from "..";
+import {
+  app,
+  config,
+  launcherUpdatesService,
+  logger,
+  profilesService,
+  seasonStatsService,
+  serversService,
+  userService,
+} from "..";
 import errors from "../utilities/errors";
 import jwt, { decode, type JwtPayload } from "jsonwebtoken";
 import { Encryption } from "../utilities/encryption";
 import { XmppService } from "../sockets/xmpp/saved/XmppServices";
 import path from "node:path";
-import { servers } from "../sockets/matchmaker/server";
+import rotate from "../shop/rotate/rotate";
+import ProfileHelper from "../utilities/ProfileHelper";
 
 enum ARoles {
   None = "None",
@@ -46,12 +56,15 @@ interface TokenPayload {
   avatar: string;
   roles: string;
   userId: string;
+  email: string;
+  password: string;
   profile: ProfileData;
 }
 
 interface ProfileData {
   athena: AthenaProfile;
   common_core: CommonCoreProfile;
+  stats: GlobalStats;
 }
 
 interface AthenaProfile {
@@ -61,6 +74,11 @@ interface AthenaProfile {
   bookPurchased: boolean;
   bookLevel: number;
   bookXp: number;
+}
+
+interface GlobalStats {
+  wins: number;
+  kills: number;
 }
 
 interface CommonCoreProfile {
@@ -130,6 +148,7 @@ export default function () {
       const user = await userService.findUserByDiscordId(userData.id);
 
       if (!user) {
+        logger.error(`Failed to find user`);
         return c.json(errors.createError(400, c.req.url, "Failed to find user.", timestamp), 400);
       }
 
@@ -167,14 +186,22 @@ export default function () {
 
       const { athena, common_core } = profile;
 
-      const favorite_character = athena.stats.attributes.favorite_character?.replace(
-        "AthenaCharacter:",
-        "",
-      );
+      let favorite_character = ProfileHelper.getItemByKey(
+        athena,
+        athena.stats.attributes.favorite_character!,
+      ).templateId.replace("AthenaCharacter:", "");
+
+      if (!favorite_character) {
+        return c.json(errors.createError(400, c.req.url, "Failed to find skin.", timestamp), 400);
+      }
 
       const currentSkin = await axios
         .get(`https://fortnite-api.com/v2/cosmetics/br/${favorite_character}`)
         .then((res) => res.data.data);
+
+      if (!currentSkin) {
+        return c.json(errors.createError(400, c.req.url, "Failed to find skin.", timestamp), 400);
+      }
 
       const ProfileAthena = {
         currentCharacter:
@@ -187,6 +214,27 @@ export default function () {
         bookXp: athena.stats.attributes.book_xp ?? 0,
       };
 
+      const seasonStats = await seasonStatsService.findByAccountId(user.accountId);
+      if (!seasonStats) {
+        return c.json(
+          errors.createError(400, c.req.url, "Failed to find season stats.", timestamp),
+          400,
+        );
+      }
+
+      const solo = seasonStats.solos ?? 0;
+      const duo = seasonStats.duos ?? 0;
+      const squad = seasonStats.squads ?? 0;
+      const ltm = seasonStats.ltm ?? 0;
+
+      const combinedWins = solo.wins + duo.wins + squad.wins + ltm.wins;
+      const combinedKills = solo.kills + duo.kills + squad.kills + ltm.kills;
+
+      const GlobalStats = {
+        wins: combinedWins,
+        kills: combinedKills,
+      };
+
       const ProfileCommonCore = {
         vbucks: common_core.items["Currency:MtxPurchased"].quantity ?? 0,
       };
@@ -197,16 +245,19 @@ export default function () {
           accountId: user.accountId,
           avatar: userData.avatar,
           roles: currentRole,
+          email: user.email,
+          password: user.password,
           userId: userData.id,
           profile: {
             athena: ProfileAthena,
             common_core: ProfileCommonCore,
+            stats: GlobalStats,
           },
         }),
         config.client_secret,
       );
 
-      return c.redirect(`demeter://auth:${newToken}`);
+      return c.redirect(`orion://auth:${newToken}`);
     } catch (error) {
       logger.error(`Failed to get discord user: ${error}`);
       return c.json(errors.createError(500, c.req.url, "Internal Server Error", timestamp), 500);
@@ -241,6 +292,8 @@ export default function () {
       return c.json({
         accountId: payload.accountId,
         username: payload.username,
+        email: payload.email,
+        password: payload.password,
         discordId: payload.userId,
         avatar: `https://cdn.discordapp.com/avatars/${payload.userId}/${payload.avatar}.png`,
         roles: payload.roles,
@@ -304,7 +357,7 @@ export default function () {
       case "mucs":
         return c.json(XmppService.xmppMucs);
       case "servers":
-        return c.json(servers);
+        return c.json(await serversService.getAllServers());
     }
   });
 
@@ -313,6 +366,7 @@ export default function () {
     const timestamp = new Date().toISOString();
 
     if (!accountId) {
+      console.log("Missing body parameter 'accountId'");
       return c.json(
         errors.createError(400, c.req.url, "Missing body parameter 'accountId'", timestamp),
         400,
@@ -321,20 +375,29 @@ export default function () {
 
     const profile = await profilesService.findByAccountId(accountId);
     if (!profile) {
+      console.log("Failed to find profile.");
       return c.json(errors.createError(400, c.req.url, "Failed to find profile.", timestamp), 400);
     }
 
     try {
       const { athena, common_core } = profile;
 
-      const favorite_character = athena.stats.attributes.favorite_character?.replace(
-        "AthenaCharacter:",
-        "",
-      );
+      let favorite_character = ProfileHelper.getItemByKey(
+        athena,
+        athena.stats.attributes.favorite_character!,
+      ).templateId.replace("AthenaCharacter:", "");
+
+      if (!favorite_character) {
+        return c.json(errors.createError(400, c.req.url, "Failed to find skin.", timestamp), 400);
+      }
 
       const currentSkin = await axios
         .get(`https://fortnite-api.com/v2/cosmetics/br/${favorite_character}`)
         .then((res) => res.data.data);
+
+      if (!currentSkin) {
+        return c.json(errors.createError(400, c.req.url, "Failed to find skin.", timestamp), 400);
+      }
 
       const ProfileAthena = {
         currentCharacter:
@@ -347,6 +410,27 @@ export default function () {
         bookXp: athena.stats.attributes.book_xp ?? 0,
       };
 
+      const seasonStats = await seasonStatsService.findByAccountId(accountId);
+      if (!seasonStats) {
+        return c.json(
+          errors.createError(400, c.req.url, "Failed to find season stats.", timestamp),
+          400,
+        );
+      }
+
+      const solo = seasonStats.solos ?? 0;
+      const duo = seasonStats.duos ?? 0;
+      const squad = seasonStats.squads ?? 0;
+      const ltm = seasonStats.ltm ?? 0;
+
+      const combinedWins = solo.wins + duo.wins + squad.wins + ltm.wins;
+      const combinedKills = solo.kills + duo.kills + squad.kills + ltm.kills;
+
+      const GlobalStats = {
+        wins: combinedWins,
+        kills: combinedKills,
+      };
+
       const ProfileCommonCore = {
         vbucks: common_core.items["Currency:MtxPurchased"].quantity ?? 0,
       };
@@ -355,6 +439,7 @@ export default function () {
         profile: {
           athena: ProfileAthena,
           common_core: ProfileCommonCore,
+          stats: GlobalStats,
         },
       });
     } catch (error) {
@@ -380,5 +465,93 @@ export default function () {
     } catch (error) {
       return c.json(errors.createError(500, c.req.url, "Internal Server Error", timestamp), 500);
     }
+  });
+
+  app.post("/chronos/launcher/updates", async (c) => {
+    const { date, previousVersion, version, whatsNewText, changelog } = await c.req.json();
+    const timestamp = new Date().toISOString();
+
+    if (!date || !previousVersion || !version || !whatsNewText || !changelog) {
+      return c.json(
+        errors.createError(400, c.req.url, "Missing body parameter 'date'", timestamp),
+        400,
+      );
+    }
+
+    try {
+      const launcherUpdate = await launcherUpdatesService.create({
+        date,
+        previousVersion,
+        version,
+        whatsNewText,
+        changelog,
+      });
+      if (!launcherUpdate) {
+        return c.json(
+          errors.createError(400, c.req.url, "Failed to create launcher update.", timestamp),
+          400,
+        );
+      }
+
+      return c.json(launcherUpdate);
+    } catch (error) {
+      logger.error(`Failed to create launcher update: ${error}`);
+      return c.json(errors.createError(500, c.req.url, "Internal Server Error", timestamp), 500);
+    }
+  });
+
+  app.get("/size", async (c) => {
+    try {
+      const url = c.req.query("url");
+
+      const response = await axios.head(url!);
+      return c.json({
+        size: response.headers["content-length"],
+      });
+    } catch (error) {
+      logger.error(`Failed to get size of file: ${error}`);
+      return c.json(errors.createError(500, c.req.url, "Internal Server Error", ""), 500);
+    }
+  });
+
+  app.get("/chronos/launcher/updates/latest", async (c) => {
+    try {
+      const latestLauncherUpdate = await launcherUpdatesService.findNewestVersion();
+
+      if (!latestLauncherUpdate) {
+        return c.json(
+          errors.createError(400, c.req.url, "Failed to find the latest launcher update.", ""),
+          400,
+        );
+      }
+
+      return c.json(latestLauncherUpdate);
+    } catch (error) {
+      logger.error(`Failed to retrieve the latest launcher update: ${error}`);
+      return c.json(errors.createError(500, c.req.url, "Internal Server Error", ""), 500);
+    }
+  });
+
+  app.get("/chronos/launcher/updates", async (c) => {
+    const launcherUpdates = await launcherUpdatesService.findAll();
+    if (!launcherUpdates) {
+      return c.json(
+        errors.createError(400, c.req.url, "Failed to find all launcher updates.", ""),
+        400,
+      );
+    }
+
+    return c.json(launcherUpdates);
+  });
+
+  app.get("/chronos/forcerotate", async (c) => {
+    const ro = await rotate();
+    const timestamp = new Date().toISOString();
+
+    if (!ro) {
+      return c.json(errors.createError(400, c.req.url, "Failed to rotate.", timestamp), 400);
+    }
+
+    return c.json({ success: "worked" });
   });
 }

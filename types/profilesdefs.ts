@@ -53,6 +53,24 @@ export interface PastSeasons {
   survivorPrestige: number;
 }
 
+export interface LockerSlot {
+  items: string[];
+  activeVariants?: {
+    variants: any[];
+  }[];
+}
+
+export type LockerSlotKey =
+  | "Backpack"
+  | "Character"
+  | "Dance"
+  | "Glider"
+  | "ItemWrap"
+  | "LoadingScreen"
+  | "MusicPack"
+  | "Pickaxe"
+  | "SkyDiveContrail";
+
 export interface IProfile {
   _id: string;
   createdAt: string;
@@ -61,8 +79,9 @@ export interface IProfile {
   wipeNumber: number;
   accountId: string;
   profileId: string;
-  version: "no_version";
+  version: string;
   stats: {
+    templateId?: string;
     attributes: Partial<StatsAttributes>;
   };
   items: {
@@ -79,8 +98,18 @@ export interface StatsAttributes {
   current_season: number;
   last_used_project: string;
   max_island_plots: number;
+  homebase_name?: string;
   publish_allowed: boolean;
   support_code: string;
+  bans?: object;
+  homebase?: {
+    bannerColorId: string;
+    bannerIconId: string;
+    flagColor: number;
+    flagPattern: number;
+    townName: string;
+  };
+  default_hero_squad_id?: string;
   last_used_plot: string;
   creator_name: string;
   use_random_loadout: boolean;
@@ -97,19 +126,31 @@ export interface StatsAttributes {
   current_mtx_platform: string;
   last_xp_interaction: string;
   node_costs: {
-    homebase_node_default_page: {
+    homebase_node_default_page?: {
       [key: string]: number;
     };
-    research_node_default_page: {
+    research_node_default_page?: {
       [key: string]: number;
     };
   };
+  twitch?: object;
+  mode_loadouts?: any[];
+
   mission_alert_redemption_record: {
-    claimData: {
+    lastClaimTimesMap?: any;
+    lastClaimedGuidPerTheater?: any;
+    claimData?: {
       missionAlertId: string;
       evictClaimDataAfterUtc: string;
       redemptionDateUtc: string;
     }[];
+  };
+  node_loadouts?: any[];
+  named_counters?: {
+    [key: string]: {
+      current_count: number;
+      last_incremented_time: string;
+    };
   };
   player_loadout?: {
     primaryQuickBarRecord: {
@@ -117,6 +158,7 @@ export interface StatsAttributes {
         items: any[];
       }[];
     };
+    pinnedSchematicInstances: any[];
     secondaryQuickBarRecord: {
       slots: {
         items: any[];
@@ -138,11 +180,12 @@ export interface StatsAttributes {
   latent_xp_marker: string;
   collection_book: {
     maxBookXpLevelAchieved: number;
+    pages: string[];
   };
   quest_manager: {
     dailyLoginInterval: string;
     dailyQuestRerolls: number;
-    questPoolStats: {
+    questPoolStats?: {
       dailyLoginInterval: string;
       poolLockouts: {
         poolLockouts: {
@@ -157,6 +200,9 @@ export interface StatsAttributes {
       }[];
     };
   };
+  campaign_stats: {
+    season: number;
+  }[];
   gameplay_stats: {
     statValue: number;
     statName: string;
@@ -244,10 +290,20 @@ export interface StatsAttributes {
   weekly_purchases: any;
   daily_purchases: any;
   ban_history: {
-    banCount: number;
+    banCount: { [key: string]: number };
     banTier: any;
   };
-  in_app_purchases: any;
+  in_app_purchases: {
+    receipts: string[];
+    ignoredReceipts: string[];
+    fulfillmentCounts: Record<string, number>;
+    refreshTimers: {
+      [key: string]: {
+        nextEntitlementRefresh: string;
+      };
+    };
+    version: number;
+  };
   permissions: any[];
   undo_timeout: string;
   monthly_purchases: any;
@@ -326,9 +382,11 @@ export interface ItemValue {
   squad_slot_idx?: number;
   userMessage?: string;
   templateIdHashed?: string;
+  quest_state?: string;
   portrait?: string;
   building_slot_used?: number;
   set_bonus?: string;
+  [key: string]: any;
   sent_new_notification: boolean;
   ObjectiveState: ObjectiveState[];
   lootList?: any[];
@@ -457,7 +515,7 @@ export interface ItemValue {
     slots: {
       [slotName: string]: {
         items: string[];
-        activeVariants: any[];
+        activeVariants?: any[];
       };
     };
   };

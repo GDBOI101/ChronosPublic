@@ -4,21 +4,21 @@ import { logger, profilesService, questsService } from "../..";
 import Config from "../../wrappers/Env.wrapper";
 import { handleProfileSelection } from "../../operations/QueryProfile";
 
-interface DailyQuestDef {
+export interface DailyQuestDef {
   Type: string;
   Name: string;
   Class: string;
   Properties: DailyQuestProps;
 }
 
-interface BattlepassQuestDef {
+export interface BattlepassQuestDef {
   Name: string;
   ChallengeBundleSchedule: string;
   Level: number;
   Objects: BattlepassQuestObjects[];
 }
 
-interface BattlepassQuestObjects {
+export interface BattlepassQuestObjects {
   Name: string;
   Options: ObjectsOptions;
   Rewards: ObjectsRewards[];
@@ -49,7 +49,7 @@ interface DailyQuestProps {
   Objectives: DailyQuestObjectives[];
 }
 
-interface DailyQuestObjectives {
+export interface DailyQuestObjectives {
   BackendName: string;
   ObjectiveState: string;
   ItemEvent: string;
@@ -180,11 +180,11 @@ export namespace QuestManager {
     }
   }
 
-  export async function getRandomQuest(accountId: string): Promise<DailyQuestDef | undefined> {
+  export async function getRandomQuests(accountId: string): Promise<DailyQuestDef[]> {
     const quests = Array.from(listedQuests[QuestType.REPEATABLE].values());
 
     if (quests.length === 0) {
-      return;
+      return [];
     }
 
     const availableQuests = await Promise.all(
@@ -194,15 +194,46 @@ export namespace QuestManager {
       })),
     );
 
-    const filteredQuests = availableQuests.filter(({ isUsed }) => !isUsed);
+    const unusedQuests = availableQuests.filter(({ isUsed }) => !isUsed).map(({ quest }) => quest);
 
-    if (filteredQuests.length === 0) {
-      return;
+    if (unusedQuests.length === 0) {
+      return [];
     }
 
-    const randomIndex = Math.floor(Math.random() * filteredQuests.length);
-    logger.debug(`Randomly selected quest index: ${randomIndex}`);
-    return filteredQuests[randomIndex].quest;
+    const shuffledFiles = unusedQuests.sort(() => 0.5 - Math.random());
+
+    const numQuests = Math.min(3, shuffledFiles.length);
+    const randomQuests = shuffledFiles.slice(0, numQuests);
+
+    return randomQuests.map((quest) => quest);
+  }
+
+  export async function getRandomQuest(accountId: string): Promise<DailyQuestDef[]> {
+    const quests = Array.from(listedQuests[QuestType.REPEATABLE].values());
+
+    if (quests.length === 0) {
+      return [];
+    }
+
+    const availableQuests = await Promise.all(
+      quests.map(async (quest) => ({
+        quest,
+        isUsed: await isQuestUsed(quest, accountId),
+      })),
+    );
+
+    const unusedQuests = availableQuests.filter(({ isUsed }) => !isUsed).map(({ quest }) => quest);
+
+    if (unusedQuests.length === 0) {
+      return [];
+    }
+
+    const shuffledFiles = unusedQuests.sort(() => 0.5 - Math.random());
+
+    const numQuests = Math.min(1, shuffledFiles.length);
+    const randomQuests = shuffledFiles.slice(0, numQuests);
+
+    return randomQuests.map((quest) => quest);
   }
 
   export async function getBPQuests(): Promise<BattlepassQuestDef[]> {

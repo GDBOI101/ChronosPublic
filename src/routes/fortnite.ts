@@ -1,4 +1,4 @@
-import { accountService, app, userService } from "..";
+import { accountService, app, receiptsService, userService } from "..";
 import { Validation } from "../middleware/validation";
 import path from "node:path";
 import errors from "../utilities/errors";
@@ -21,8 +21,9 @@ export default function () {
 
       const user = await userService.findUserByAccountId(accountId);
       const account = await accountService.findUserByAccountId(accountId);
+      const receipts = await receiptsService.findByAccountId(accountId);
 
-      if (!user || !account) {
+      if (!user || !account || !receipts) {
         return c.json(
           errors.createError(404, c.req.url, "Failed to find user or account.", timestamp),
           404,
@@ -31,7 +32,7 @@ export default function () {
 
       const permissions = c.get("permission");
 
-      const hasPermission = permissions.hasPermission(
+      const hasPermission = await permissions.hasPermission(
         `fortnite:profile:${user.accountId}:receipts`,
         "*",
       );
@@ -47,7 +48,7 @@ export default function () {
           401,
         );
 
-      return c.json(account.receipts);
+      return c.json(receipts.receipts);
     },
   );
 }

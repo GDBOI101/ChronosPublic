@@ -16,6 +16,19 @@ export interface JSONResponse {
   path: string;
   added: string;
   shopHistory: string[] | null;
+  variants: VariantsDef[];
+}
+
+interface VariantsDef {
+  channel: string;
+  type: string;
+  options: VariantsDefOptions[];
+}
+
+interface VariantsDefOptions {
+  tag: string;
+  name: string;
+  image: string;
 }
 
 interface BackpackDef extends JSONResponse {}

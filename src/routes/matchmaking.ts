@@ -1,7 +1,17 @@
-import { accountService, app, config, logger, userService } from "..";
+import {
+  accountService,
+  app,
+  config,
+  logger,
+  serversService,
+  sessionsService,
+  userService,
+} from "..";
 import { GameserverIps } from "../../hosting/hostOptions";
 import { Validation } from "../middleware/validation";
-import { servers } from "../sockets/matchmaker/server";
+import { Cache } from "../sockets/sessionsmatchmaker/cache";
+import { SessionHelper } from "../sockets/sessionsmatchmaker/SessionHelper";
+import { Utils } from "../sockets/sessionsmatchmaker/utils";
 import { XmppService, type PartyInfo, type StatusInfo } from "../sockets/xmpp/saved/XmppServices";
 import { Encryption } from "../utilities/encryption";
 import errors from "../utilities/errors";
@@ -151,6 +161,84 @@ export default function () {
   );
 
   app.get(
+    "/fortnite/api/game/v2/matchmakingservice/ticket/session/:sessionId",
+    Validation.verifyToken,
+    async (c) => {
+      const sessionId = c.req.param("sessionId");
+
+      const user = c.get("user");
+      const account = c.get("account");
+
+      const bucketId = c.req.query("bucketId");
+      const timestamp = new Date().toISOString();
+
+      const useragent = c.req.header("User-Agent");
+
+      if (!useragent)
+        return c.json(
+          errors.createError(400, c.req.url, "header 'User-Agent' is missing.", timestamp),
+          400,
+        );
+
+      const uahelper = uaparser(useragent);
+
+      if (!uahelper)
+        return c.json(
+          errors.createError(400, c.req.url, "Failed to parse User-Agent.", timestamp),
+          400,
+        );
+
+      const accessToken = c.req.header("Authorization")?.split("bearer ")[1].replace("eg1~", "");
+
+      if (!accessToken || !account || !user)
+        return c.json(errors.createError(400, c.req.url, "Failed to find user.", timestamp));
+
+      if (user.banned)
+        return c.json(errors.createError(403, c.req.url, "You are banned", timestamp), 403);
+
+      const bucketIds = bucketId?.split(":");
+
+      if (bucketIds!.length < 4 || bucketIds!.length !== 4 || typeof bucketId !== "string")
+        return c.json(errors.createError(400, c.req.url, "Invalid BucketId.", timestamp), 400);
+
+      if (!bucketIds![2] || !bucketIds)
+        return c.json(errors.createError(400, c.req.url, "Invalid BucketId.", timestamp), 400);
+
+      const partyPlayerIds = c.req.query("partyPlayerIds");
+
+      const { id: partyId = "party_not_found", members: partyMembers = [] } =
+        Object.values(XmppService.parties).reduce((foundParty, party) => {
+          if (foundParty) return foundParty;
+          const hasMember = party.members.some((member) => member.account_id === user.accountId);
+          return hasMember ? party : null;
+        }, null as PartyInfo | null) ?? {};
+
+      const playlist = bucketIds![3];
+      const region = bucketIds![2];
+
+      return c.json({
+        serviceUrl: "ws://127.0.0.1:899",
+        ticketType: "mms-session",
+        payload: JSON.stringify({
+          sessionId,
+        }),
+        signature: Encryption.encrypt(
+          JSON.stringify({
+            accountId: user.accountId,
+            bucketId,
+            region,
+            userAgent: c.req.header("User-Agent"),
+            playlist,
+            partyMembers: partyMembers ?? partyPlayerIds,
+            buildUniqueId: bucketIds![0],
+          }),
+          config.client_secret,
+        ),
+      });
+    },
+  );
+
+  app.get(
     "/fortnite/api/game/v2/matchmaking/account/:accountId/session/:sessionId",
     Validation.verifyToken,
     async (c) => {
@@ -165,7 +253,7 @@ export default function () {
       if (user.banned)
         return c.json(errors.createError(403, c.req.url, "User is banned!", timestamp), 403);
 
-      const session = servers.find((s) => s.sessionId === sessionId);
+      const session = await serversService.getServerBySessionId(sessionId);
 
       if (!session)
         return c.json(
@@ -189,7 +277,7 @@ export default function () {
   app.get("/fortnite/api/matchmaking/session/:sessionId", Validation.verifyToken, async (c) => {
     const sessionId = c.req.param("sessionId");
 
-    const session = servers.find((s) => s.sessionId === sessionId);
+    const session = await serversService.getServerBySessionId(sessionId);
     const timestamp = new Date().toISOString();
 
     if (!session)
@@ -219,7 +307,7 @@ export default function () {
       maxPrivatePlayers: 0,
       openPrivatePlayers: 0,
       attributes: {
-        REGION_s: "EU",
+        REGION_s: session.options.region,
         GAMEMODE_s: "FORTATHENA",
         ALLOWBROADCASTING_b: true,
         SUBREGION_s: "GB",
@@ -228,7 +316,7 @@ export default function () {
         MATCHMAKINGPOOL_s: "Any",
         STORMSHIELDDEFENSETYPE_i: 0,
         HOTFIXVERSION_i: 0,
-        PLAYLISTNAME_s: "Playlist_DefaultSolo",
+        PLAYLISTNAME_s: session.options.playlist,
         SESSIONKEY_s: uuid().replace(/-/gi, "").toUpperCase(),
         TENANT_s: "Fortnite",
         BEACONPORT_i: 15009,
@@ -257,7 +345,7 @@ export default function () {
       const sessionId = c.req.param("sessionId");
       const timestamp = new Date().toISOString();
 
-      const session = servers.find((s) => s.sessionId === sessionId);
+      const session = await serversService.getServerBySessionId(sessionId);
 
       if (!session)
         return c.json(
@@ -288,7 +376,7 @@ export default function () {
       const sessionId = c.req.param("sessionId");
       const timestamp = new Date().toISOString();
 
-      const session = servers.find((s) => s.sessionId === sessionId);
+      const session = await serversService.getServerBySessionId(sessionId);
 
       // so it doesn't freak out, ill find a better way to do this later.
       if (!session) return c.json([], 200);
@@ -304,34 +392,27 @@ export default function () {
     },
   );
 
-  app.post("/fortnite/api/matchmaking/session", Validation.verifyToken, async (c) => {
-    const timestamp = new Date().toISOString();
+  app.post("/fortnite/api/matchmaking/session", Validation.verifyToken, async (c) => {});
 
-    let body;
+  app.delete(
+    "/fortnite/api/matchmaking/session/:sessionId",
+    Validation.verifyToken,
+    async (c) => {},
+  );
 
-    try {
-      body = await c.req.json();
-    } catch (error) {
-      return c.json(errors.createError(400, c.req.url, "Body isn't Valid JSON!", timestamp));
-    }
+  app.post(
+    "/fortnite/api/matchmaking/session/:sessionId/players",
+    Validation.verifyToken,
+    async (c) => {},
+  );
 
-    let response;
+  // TODO: /fortnite/api/matchmaking/sessionId/heartbeat (this is very unknown, i have no clue how it works. i think it just updates the ploayers or something like that?)
 
-    for (const allServers of servers) {
-      const currentBucketId = allServers.identifier.split(":")[0];
-
-      logger.debug(
-        `Session ${allServers.sessionId} ${allServers.address}:${allServers.port} - ${currentBucketId}`,
-      );
-
-      response = {
-        sessionId: allServers.sessionId,
-        serverAddress: allServers.address,
-        serverPort: body.serverPort,
-        ...body,
-      };
-    }
-
-    return c.json(response);
-  });
+  app.post(
+    "/fortnite/api/matchmaking/session/matchMakingRequest",
+    Validation.verifyToken,
+    async (c) => {
+      return c.json([]);
+    },
+  );
 }

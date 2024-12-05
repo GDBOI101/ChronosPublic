@@ -54,6 +54,10 @@ export default function uaparser(userAgent: string | undefined): SeasonInfo | nu
         lobby = "LobbyWinterDecor";
         break;
 
+      case season === 6:
+        background = "fortnitemares";
+        break;
+
       case season === 10:
         background = "seasonx";
         break;

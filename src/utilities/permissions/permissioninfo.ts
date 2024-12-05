@@ -1,94 +1,143 @@
-import { accountService, logger } from "../..";
-import type {
-  Abilities,
-  AbilitiesCombination,
-  GrantType,
-  Permission,
-} from "../../../types/permissionsdefs";
-import { Account } from "../../tables/account";
+import { accountService, logger, userService } from "../..";
+import type { Abilities, AbilitiesCombination, Permission } from "../../../types/permissionsdefs";
+import type { Account } from "../../tables/account";
 import { parseAbilities } from "./permissionhelpers";
 
 const VALID_ABILITIES: Abilities[] = ["READ", "DELETE", "LIST", "CREATE", "*"];
-const VALID_GRANTS: GrantType[] = ["client_credentials", "authorization_code", "refresh_token"];
+
+const DEFAULT_ACTIONS = {
+  READ: 1,
+  UPDATE: 2,
+  DELETE: 3,
+  LIST: 4,
+  CREATE: 5,
+};
+
+const DEFAULT_RESOURCES = {
+  SYSTEM: "fortnite:cloudstorage:system",
+  PROFILE_COMMANDS: (accountId: string) => `fortnite:profile:${accountId}:commands`,
+  PROFILE_RECEIPTS: (accountId: string) => `fortnite:profile:${accountId}:receipts`,
+  CALENDAR: "fortnite:calender",
+  STATS: "fortnite:stats",
+  DEFAULT_ENGINE: "fortnite:cloudstorage:system:DefaultEngine.ini",
+  DEFAULT_GAME: "fortnite:cloudstorage:system:DefaultGame.ini",
+  DEFAULT_RUNTIME: "fortnite:cloudstorage:system:DefaultRuntimeOptions.ini",
+};
 
 export default class PermissionInfo {
-  private readonly grant: GrantType;
-
-  constructor(
-    public accountId: string | null,
-    public displayName: string | null,
-    public clientId: string,
-    grant: GrantType,
-  ) {
-    this.grant = VALID_GRANTS.includes(grant) ? grant : "client_credentials";
-
-    this.init();
+  constructor(public accountId: string) {
+    if (this.accountId) {
+      this.init().catch((error) => logger.error(`Error initializing permissions: ${error}`));
+    }
   }
 
   private async init(): Promise<void> {
-    if (this.accountId) {
-      const account = await accountService.findUserByAccountId(this.accountId);
+    const user = await this.getUser();
+    if (user) {
+      const defaultPermissions = this.createDefaultPermissions(user.accountId);
+      await this.updatePermissions(defaultPermissions);
+    }
+  }
 
-      if (account) {
-        const defaultPermissions: Permission[] = [
-          { resource: "fortnite:cloudstorage:system", abilities: "READ", action: 1 },
-          { resource: "fortnite:cloudstorage:system:*", abilities: "READ", action: 2 },
-          { resource: `friends:${account.accountId}`, abilities: "READ,UPDATE,DELETE", action: 15 },
-          {
-            resource: `fortnite:profile:${account.accountId}:commands`,
-            abilities: "*",
-            action: 10,
-          },
-          {
-            resource: `fortnite:profile:${account.accountId}:receipts`,
-            abilities: "*",
-            action: 10,
-          },
-          { resource: "fortnite:calender", abilities: "READ", action: 2 },
-          {
-            resource: "fortnite:cloudstorage:system:DefaultEngine.ini",
-            abilities: "READ",
-            action: 1,
-          },
-          {
-            resource: "fortnite:cloudstorage:system:DefaultGame.ini",
-            abilities: "READ",
-            action: 1,
-          },
-          {
-            resource: "fortnite:cloudstorage:system:DefaultRuntimeOptions.ini",
-            abilities: "READ",
-            action: 1,
-          },
-          { resource: "fortnite:stats", abilities: "READ", action: 2 },
-        ];
+  private async getUser(): Promise<{ accountId: string } | null> {
+    try {
+      return await userService.findUserByAccountId(this.accountId);
+    } catch (error) {
+      logger.error(`Error fetching user: ${error}`);
+      return null;
+    }
+  }
 
-        for (const permission of defaultPermissions) {
-          await this.addPermission(permission);
-        }
+  private createDefaultPermissions(accountId: string): Permission[] {
+    const permissions: Permission[] = [
+      this.createPermission(DEFAULT_RESOURCES.SYSTEM, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(`${DEFAULT_RESOURCES.SYSTEM}:*`, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(`friends:${accountId}`, "READ,UPDATE,DELETE", DEFAULT_ACTIONS.UPDATE),
+      this.createPermission(
+        DEFAULT_RESOURCES.PROFILE_COMMANDS(accountId),
+        "*",
+        DEFAULT_ACTIONS.CREATE,
+      ),
+      this.createPermission(
+        DEFAULT_RESOURCES.PROFILE_RECEIPTS(accountId),
+        "*",
+        DEFAULT_ACTIONS.CREATE,
+      ),
+      this.createPermission(DEFAULT_RESOURCES.CALENDAR, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.DEFAULT_ENGINE, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.DEFAULT_GAME, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.DEFAULT_RUNTIME, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.STATS, "READ", DEFAULT_ACTIONS.READ),
+    ];
+
+    return permissions.filter((permission) => this.isValidPermission(permission));
+  }
+
+  private createPermission(
+    resource: string,
+    abilities: Abilities | AbilitiesCombination,
+    action: number,
+  ): Permission {
+    return { resource, abilities, action };
+  }
+
+  private isValidPermission(permission: Permission): boolean {
+    return (
+      typeof permission.resource === "string" &&
+      typeof permission.abilities === "string" &&
+      typeof permission.action === "number" &&
+      Object.values(DEFAULT_ACTIONS).includes(permission.action)
+    );
+  }
+
+  private async findAccount(): Promise<Account | null> {
+    try {
+      if (!this.accountId) {
+        logger.error("Account ID is not set.");
+        return null;
+      }
+      return await accountService.findUserByAccountId(this.accountId);
+    } catch (error) {
+      logger.error(`Error finding account: ${error}`);
+      return null;
+    }
+  }
+
+  private async updatePermissions(permissions: Permission[]): Promise<void> {
+    const account = await this.findAccount();
+    if (account) {
+      try {
+        const updatedPermissions = this.mergePermissions(account.permissions, permissions);
+        await accountService.updateAccount(this.accountId, { permissions: updatedPermissions });
+      } catch (error) {
+        logger.error(`Error updating permissions: ${error}`);
       }
     }
   }
 
+  private mergePermissions(
+    existingPermissions: Permission[],
+    newPermissions: Permission[],
+  ): Permission[] {
+    const permissionsMap = new Map<string, Permission>();
+
+    existingPermissions.forEach((p) => permissionsMap.set(p.resource, p));
+    newPermissions.forEach((p) => permissionsMap.set(p.resource, p));
+
+    return Array.from(permissionsMap.values());
+  }
+
   public async removePermission(resource: string): Promise<boolean> {
+    const account = await this.findAccount();
+    if (!account) return false;
+
     try {
-      if (!this.accountId) {
-        logger.error("Account ID is not set.");
-        return false;
-      }
+      const updatedPermissions = ((account.permissions as Permission[]) || []).filter(
+        (permission) => permission.resource !== resource,
+      );
 
-      const account = await accountService.findUserByAccountId(this.accountId);
-      if (!account) {
-        logger.error(`Account ${this.accountId} does not exist.`);
-        return false;
-      }
-
-      const permissions = (account.permissions as Permission[]) || [];
-      const updatedPermissions = permissions.filter((p) => p.resource !== resource);
-
-      return await accountService.updateAccount(this.accountId, {
-        permissions: updatedPermissions,
-      });
+      await accountService.updateAccount(this.accountId, { permissions: updatedPermissions });
+      return true;
     } catch (error) {
       logger.error(`Error removing permission: ${error}`);
       return false;
@@ -96,34 +145,20 @@ export default class PermissionInfo {
   }
 
   public async addPermission(permission: Permission): Promise<boolean> {
+    if (!this.isValidPermission(permission)) {
+      logger.error(`Invalid permission: ${JSON.stringify(permission)}`);
+      return false;
+    }
+
+    const account = await this.findAccount();
+    if (!account) return false;
+
     try {
-      if (!this.accountId) {
-        logger.error("Account ID is not set.");
-        return false;
-      }
+      const existingPermissions = (account.permissions as Permission[]) || [];
+      const updatedPermissions = this.mergePermissions(existingPermissions, [permission]);
 
-      if (!this.isPermissionValid(permission)) {
-        logger.error(
-          `Attempted to add invalid permission: ${permission.resource} [${JSON.stringify(
-            permission.abilities,
-          )}]`,
-        );
-        return false;
-      }
-
-      const account = await accountService.findUserByAccountId(this.accountId);
-      if (!account) {
-        logger.error(`Account ${this.accountId} does not exist.`);
-        return false;
-      }
-
-      const permissions = (account.permissions as Permission[]) || [];
-      const updatedPermissions = permissions.filter((p) => p.resource !== permission.resource);
-      updatedPermissions.push(permission);
-
-      return await accountService.updateAccount(this.accountId, {
-        permissions: updatedPermissions,
-      });
+      await accountService.updateAccount(this.accountId, { permissions: updatedPermissions });
+      return true;
     } catch (error) {
       logger.error(`Error adding permission: ${error}`);
       return false;
@@ -134,15 +169,11 @@ export default class PermissionInfo {
     resource: string,
     requiredAbilities: Abilities | AbilitiesCombination[],
   ): Promise<boolean> {
+    const account = await this.findAccount();
+    if (!account) return false;
+
     try {
-      const account = await accountService.findUserByAccountId(this.accountId as string);
-
-      if (!account) {
-        logger.error(`Account ${this.accountId} does not exist.`);
-        return false;
-      }
-
-      const permissions = (account.permissions as Permission[]) || [];
+      const permissions = account.permissions as Permission[];
       const perm = permissions.find((p) => p.resource === resource);
       if (!perm) {
         logger.error(`Permission ${resource} does not exist.`);
@@ -155,46 +186,20 @@ export default class PermissionInfo {
 
       const permAbilities = parseAbilities(perm.abilities);
 
-      const hasRequiredAbilities = abilitiesArray.some(
-        (ra) =>
-          permAbilities.includes(ra) ||
-          ra === "*" ||
-          permAbilities.includes("*") ||
-          ra === "READ,UPDATE,DELETE",
+      return abilitiesArray.some(
+        (ra) => permAbilities.includes(ra) || ra === "*" || permAbilities.includes("*"),
       );
-
-      if (!hasRequiredAbilities) {
-        logger.error(
-          `Required abilities ${abilitiesArray.join(", ")} not found for resource ${resource}`,
-        );
-        return false;
-      }
-
-      return true;
     } catch (error) {
       logger.error(`Error checking permission: ${error}`);
       return false;
     }
   }
 
-  private isPermissionValid(permission: Permission): boolean {
-    return (
-      typeof permission.resource === "string" &&
-      typeof permission.abilities === "string" &&
-      VALID_ABILITIES.some((a) => permission.abilities.includes(a)) &&
-      typeof permission.action === "number"
-    );
-  }
-
   public async getPermissions(): Promise<Permission[]> {
+    const account = await this.findAccount();
+    if (!account) return [];
+
     try {
-      const account = await accountService.findUserByAccountId(this.accountId as string);
-
-      if (!account) {
-        logger.error(`Account ${this.accountId} does not exist.`);
-        return [];
-      }
-
       return (account.permissions as Permission[]) || [];
     } catch (error) {
       logger.error(`Error getting permissions: ${error}`);
@@ -202,8 +207,100 @@ export default class PermissionInfo {
     }
   }
 
-  // im lazy so im just adding this
   public errorReturn(resource: string, ability: Abilities | AbilitiesCombination): string {
-    return `Sorry your login does not possess the permissions '${resource} ${ability}' needed to perform the requested operation`;
+    return `Sorry, your login does not possess the permissions '${resource} ${ability}' needed to perform the requested operation.`;
+  }
+
+  private static createPermission(
+    resource: string,
+    abilities: Abilities | AbilitiesCombination,
+    action: number,
+  ): Permission {
+    return { resource, abilities, action };
+  }
+
+  private static isValidPermission(permission: Permission): boolean {
+    return (
+      typeof permission.resource === "string" &&
+      typeof permission.abilities === "string" &&
+      this.isValidAbilities(permission.abilities) &&
+      typeof permission.action === "number" &&
+      Object.values(DEFAULT_ACTIONS).includes(permission.action)
+    );
+  }
+
+  private static isValidAbilities(abilities: string): boolean {
+    return abilities.split(",").every((a) => VALID_ABILITIES.includes(a.trim() as Abilities));
+  }
+
+  private static async fetchUser(accountId: string): Promise<{ accountId: string } | null> {
+    try {
+      return await userService.findUserByAccountId(accountId);
+    } catch (error) {
+      logger.error(`Error fetching user: ${error}`);
+      return null;
+    }
+  }
+
+  private static createDefaultPermissions(accountId: string): Permission[] {
+    const permissions: Permission[] = [
+      this.createPermission(DEFAULT_RESOURCES.SYSTEM, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(`${DEFAULT_RESOURCES.SYSTEM}:*`, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(`friends:${accountId}`, "READ,UPDATE,DELETE", DEFAULT_ACTIONS.UPDATE),
+      this.createPermission(
+        `${DEFAULT_RESOURCES.PROFILE_COMMANDS}:${accountId}`,
+        "*",
+        DEFAULT_ACTIONS.CREATE,
+      ),
+      this.createPermission(
+        `${DEFAULT_RESOURCES.PROFILE_RECEIPTS}:${accountId}`,
+        "*",
+        DEFAULT_ACTIONS.CREATE,
+      ),
+      this.createPermission(DEFAULT_RESOURCES.CALENDAR, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.DEFAULT_ENGINE, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.DEFAULT_GAME, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.DEFAULT_RUNTIME, "READ", DEFAULT_ACTIONS.READ),
+      this.createPermission(DEFAULT_RESOURCES.STATS, "READ", DEFAULT_ACTIONS.READ),
+    ];
+
+    return permissions.filter((permission) => this.isValidPermission(permission));
+  }
+
+  public async addDefaultPermissionsToAccount(accountId: string): Promise<boolean> {
+    try {
+      const user = await this.getUser();
+      if (!user) {
+        logger.error(`User with account ID ${accountId} does not exist.`);
+        return false;
+      }
+
+      const defaultPermissions = this.createDefaultPermissions(accountId);
+      const account = await accountService.findUserByAccountId(accountId);
+      if (!account) {
+        logger.error(`Account with ID ${accountId} does not exist.`);
+        return false;
+      }
+
+      const updatedPermissions = this.mergePermissions(account.permissions, defaultPermissions);
+
+      await accountService.updateAccount(accountId, { permissions: updatedPermissions });
+      return true;
+    } catch (error) {
+      logger.error(`Error adding default permissions to account ${accountId}: ${error}`);
+      return false;
+    }
+  }
+
+  private static mergePermissions(
+    existingPermissions: Permission[],
+    newPermissions: Permission[],
+  ): Permission[] {
+    const permissionsMap = new Map<string, Permission>();
+
+    existingPermissions.forEach((p) => permissionsMap.set(p.resource, p));
+    newPermissions.forEach((p) => permissionsMap.set(p.resource, p));
+
+    return Array.from(permissionsMap.values());
   }
 }

@@ -6,7 +6,7 @@ import { updatePresenceForFriend } from "./utilities/UpdatePresenceForFriend";
 import xmlbuilder from "xmlbuilder";
 import { v4 as uuid } from "uuid";
 
-export interface ChronosSocket extends ServerWebSocket {
+export interface LyntSocket extends ServerWebSocket {
   isLoggedIn?: boolean;
   isAuthenticated?: boolean;
   accountId?: string;
@@ -14,11 +14,11 @@ export interface ChronosSocket extends ServerWebSocket {
   displayName?: string;
   jid?: string;
   resource?: string;
-  socket?: ServerWebSocket<ChronosSocket> | null;
+  socket?: ServerWebSocket<LyntSocket> | null;
 }
 
-export const xmppServer = Bun.serve<ChronosSocket>({
-  port: 8080,
+export const xmppServer = Bun.serve<LyntSocket>({
+  port: 81,
   fetch(request, server) {
     server.upgrade(request, { data: { socket: null } });
 
@@ -57,13 +57,16 @@ export const xmppServer = Bun.serve<ChronosSocket>({
 
       if (clientStatus) {
         const parsedStatus: StatusInfo = JSON.parse(clientStatus);
+        console.log(parsedStatus);
 
-        for (const [key, property] of Object.entries(parsedStatus.Properties)) {
-          if (key.toLowerCase().startsWith("party.joininfo")) {
-            if (!property.partyId) {
-              return logger.error("Property 'partyId' is not valid.");
+        if (parsedStatus && parsedStatus.Properties) {
+          for (const [key, property] of Object.entries(parsedStatus.Properties)) {
+            if (key.toLowerCase().startsWith("party.joininfo")) {
+              if (!property.partyId) {
+                return logger.error("Property 'partyId' is not valid.");
+              }
+              partyId = property.partyId;
             }
-            partyId = property.partyId;
           }
         }
       }
@@ -92,6 +95,10 @@ export const xmppServer = Bun.serve<ChronosSocket>({
                 )
                 .up()
                 .toString(),
+            );
+
+            logger.debug(
+              `Sent party member exited message to ${jid} for account ${client.accountId}`,
             );
           }
         });

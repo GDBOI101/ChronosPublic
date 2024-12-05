@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import type { ChronosSocket } from "../server";
+import type { LyntSocket } from "../server";
 import xmlparser from "xml-parser";
 import { XmppService } from "../saved/XmppServices";
 import { logger } from "../../..";
@@ -7,7 +7,7 @@ import xmlbuilder from "xmlbuilder";
 import { sendMessageToClient } from "../utilities/SendMessageToClient";
 import { SendMessageToSender } from "../utilities/SendMessageToSender";
 
-export default async function (socket: ServerWebSocket<ChronosSocket>, clientData: xmlparser.Node) {
+export default async function (socket: ServerWebSocket<LyntSocket>, clientData: xmlparser.Node) {
   const findBodyContent = clientData.children.find((value) => value.name === "body");
 
   if (!findBodyContent || !findBodyContent.content) {
