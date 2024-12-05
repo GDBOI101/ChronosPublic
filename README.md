@@ -7,6 +7,8 @@
 ## NOTE
 
 This was made for a private project, it is not made for public use and is very buggy and unfinished.
+<br />
+Version's 12.41 onwards are not supported and your character will be invisible.
 
 ## TODO
 
