@@ -392,18 +392,97 @@ export default function () {
     },
   );
 
-  app.post("/fortnite/api/matchmaking/session", Validation.verifyToken, async (c) => {});
+  app.post("/fortnite/api/matchmaking/session", Validation.verifyToken, async (c) => {
+    const timestamp = new Date().toISOString();
 
-  app.delete(
-    "/fortnite/api/matchmaking/session/:sessionId",
-    Validation.verifyToken,
-    async (c) => {},
-  );
+    let body;
+
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      return c.json(errors.createError(400, c.req.url, "Body isn't Valid JSON!", timestamp));
+    }
+
+    let response;
+
+    const servers = await serversService.getAllServers();
+
+    for (const allServers of servers) {
+      const currentBucketId = allServers.identifier.split(":")[0];
+
+      logger.debug(
+        `Session ${allServers.sessionId} ${allServers.address}:${allServers.port} - ${currentBucketId}`,
+      );
+
+      response = {
+        sessionId: allServers.sessionId,
+        serverAddress: allServers.address,
+        serverPort: body.serverPort,
+        ...body,
+      };
+    }
+
+    await sessionsService.create(body);
+
+    return c.json(response);
+  });
+
+  app.delete("/fortnite/api/matchmaking/session/:sessionId", Validation.verifyToken, async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const session = await sessionsService.findSessionBySessionId(sessionId);
+    const timestamp = new Date().toISOString();
+
+    if (!session)
+      return c.json(
+        errors.createError(
+          404,
+          c.req.url,
+          `Failed to find session with the id ${sessionId}`,
+          timestamp,
+        ),
+        404,
+      );
+
+    await sessionsService.delete(session.sessionId);
+
+    return c.body(null, 200);
+  });
 
   app.post(
     "/fortnite/api/matchmaking/session/:sessionId/players",
     Validation.verifyToken,
-    async (c) => {},
+    async (c) => {
+      const sessionId = c.req.param("sessionId");
+      const session = await sessionsService.findSessionBySessionId(sessionId);
+      const timestamp = new Date().toISOString();
+
+      if (!session)
+        return c.json(
+          errors.createError(
+            404,
+            c.req.url,
+            `Failed to find session with the id ${sessionId}`,
+            timestamp,
+          ),
+          404,
+        );
+
+      let body;
+
+      try {
+        body = await c.req.json();
+      } catch (error) {
+        return c.json(errors.createError(400, c.req.url, "Body isn't valid", timestamp));
+      }
+
+      session.lastUpdated = new Date().toISOString();
+      session.publicPlayers.push(body.publicPlayers);
+      session.privatePlayers.push(body.privatePlayers);
+
+      await sessionsService.update(session.sessionId, session);
+
+      return c.json(session);
+    },
   );
 
   // TODO: /fortnite/api/matchmaking/sessionId/heartbeat (this is very unknown, i have no clue how it works. i think it just updates the ploayers or something like that?)
